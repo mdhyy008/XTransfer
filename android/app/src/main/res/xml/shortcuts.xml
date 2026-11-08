@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_bucket"
+        android:shortcutId="bucket"
+        android:shortcutShortLabel="@string/shortcut_bucket">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="cn.mdhyy.xtransfer.MainActivity"
+            android:targetPackage="cn.mdhyy.xtransfer">
+            <extra
+                android:name="page"
+                android:value="bucket" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_folder"
+        android:shortcutId="files"
+        android:shortcutShortLabel="@string/shortcut_files">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="cn.mdhyy.xtransfer.MainActivity"
+            android:targetPackage="cn.mdhyy.xtransfer">
+            <extra
+                android:name="page"
+                android:value="files" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_share"
+        android:shortcutId="share"
+        android:shortcutShortLabel="@string/shortcut_share">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="cn.mdhyy.xtransfer.MainActivity"
+            android:targetPackage="cn.mdhyy.xtransfer">
+            <extra
+                android:name="page"
+                android:value="share" />
+        </intent>
+    </shortcut>
+</shortcuts>

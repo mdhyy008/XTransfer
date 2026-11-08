@@ -1,0 +1,29 @@
+# 依赖与构建产物
+node_modules/
+desktop/out/
+desktop/release/
+desktop/bluetooth/**/bin/
+desktop/bluetooth/**/obj/
+android/.gradle/
+android/.kotlin/
+android/**/build/
+
+# 本机配置与密钥
+desktop/data/
+desktop/recv/
+android/local.properties
+android/signing.properties
+*.jks
+*.keystore
+
+# xlan 运行时数据（只保留可执行文件）
+desktop/resources/xlan/*
+!desktop/resources/xlan/xlan.exe
+*.db
+*.db-shm
+*.db-wal
+
+# 其他
+.claude/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">X互传</string>
+    <string name="channel_service">X互传服务</string>
+    <string name="channel_message">消息通知</string>
+    <string name="channel_offer">待接收文件</string>
+    <string name="shortcut_bucket">暂存桶</string>
+    <string name="shortcut_files">文件管理</string>
+    <string name="shortcut_share">内网分发</string>
+    <string name="widget_files_title">文件管理</string>
+    <string name="widget_files_count">%1$d 项</string>
+    <string name="widget_files_empty">暂无文件</string>
+    <string name="widget_devices_title">设备连接</string>
+    <string name="widget_devices_total">%1$d 台设备</string>
+    <string name="widget_devices_empty">暂无设备</string>
+</resources>

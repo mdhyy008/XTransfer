@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_devices_title"
+            android:textColor="@color/widget_text"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_devices_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/widget_muted"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_devices_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="14dp"
+        android:text="@string/widget_devices_empty"
+        android:textColor="@color/widget_muted"
+        android:textSize="14sp" />
+
+    <LinearLayout
+        android:id="@+id/widget_devices_row1"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="@drawable/widget_row"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_devices_name1"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/widget_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <View
+        android:id="@+id/widget_devices_div1"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/widget_line" />
+
+    <LinearLayout
+        android:id="@+id/widget_devices_row2"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="@drawable/widget_row"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_devices_name2"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/widget_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <View
+        android:id="@+id/widget_devices_div2"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/widget_line" />
+
+    <LinearLayout
+        android:id="@+id/widget_devices_row3"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="@drawable/widget_row"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_devices_name3"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/widget_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+</LinearLayout>

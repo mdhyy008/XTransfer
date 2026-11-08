@@ -1,0 +1,252 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --bg:#FDF7FF; --fg:#1C1B1F; --sub:#5D5B66; --bar:#F3EDF7;
+    --border:rgba(28,27,31,0.10); --hover:rgba(28,27,31,0.08); --accent:#6750A4;
+  }
+  body.dark{
+    --bg:#141218; --fg:#ECE6F0; --sub:#CAC4D0; --bar:#1D1B20;
+    --border:rgba(255,255,255,0.10); --hover:rgba(255,255,255,0.10); --accent:#D0BCFF;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:system-ui,"Microsoft YaHei UI","Segoe UI",sans-serif;}
+  #bar{height:48px;display:flex;align-items:center;gap:8px;padding:0 6px 0 16px;
+    background:var(--bar);border-bottom:1px solid var(--border);
+    -webkit-app-region:drag;user-select:none;}
+  #title{flex:1;min-width:0;font-size:13.5px;font-weight:600;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .iconbtn{width:34px;height:34px;border:none;border-radius:50%;background:transparent;
+    color:var(--sub);display:grid;place-items:center;cursor:pointer;padding:0;
+    -webkit-app-region:no-drag;}
+  .iconbtn:hover{background:var(--hover);}
+  .iconbtn svg{width:17px;height:17px;}
+  #close:hover{background:#E5484D;color:#fff;}
+  #main{height:calc(100% - 49px);position:relative;}
+  .pane{display:none;width:100%;height:100%;box-sizing:border-box;}
+  .pane.on{display:block;}
+  #text{margin:0;padding:20px 22px;height:100%;box-sizing:border-box;overflow:auto;
+    font-family:"Cascadia Mono","Consolas","Microsoft YaHei UI",monospace;font-size:13px;
+    line-height:1.65;white-space:pre-wrap;word-break:break-word;user-select:text;}
+  #audioBox{height:100%;flex-direction:column;align-items:center;
+    justify-content:center;gap:20px;padding:24px;box-sizing:border-box;}
+  #audioBox.on{display:flex;}
+  #audioName{font-size:14px;font-weight:600;max-width:80%;text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--sub);}
+  #audioEl{width:min(560px,80%);outline:none;}
+  #videoEl{width:100%;height:100%;background:#000;object-fit:contain;outline:none;}
+  #imageEl{width:100%;height:100%;object-fit:contain;background:transparent;
+    transform-origin:center center;will-change:transform;
+    user-select:none;-webkit-user-drag:none;}
+  #imageBox{height:100%;padding:16px;box-sizing:border-box;overflow:hidden;cursor:zoom-in;}
+  #none{height:100%;flex-direction:column;align-items:center;
+    justify-content:center;gap:18px;padding:24px;box-sizing:border-box;}
+  #none.on{display:flex;}
+  #noneName{font-size:14px;color:var(--sub);max-width:80%;text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #openBtn{border:none;border-radius:999px;padding:10px 22px;font-size:13.5px;font-weight:600;
+    background:var(--accent);color:var(--bg);cursor:pointer;}
+  #openBtn:hover{filter:brightness(1.08);}
+</style>
+</head>
+<body>
+  <header id="bar">
+    <div id="title"></div>
+    <button class="iconbtn" id="open" title="用系统应用打开">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        <path d="M15 3h6v6"/><path d="M10 14L21 3"/>
+      </svg>
+    </button>
+    <button class="iconbtn" id="close" title="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M6 6l12 12M18 6L6 18"/>
+      </svg>
+    </button>
+  </header>
+  <main id="main">
+    <pre class="pane" id="text"></pre>
+    <div class="pane" id="audioBox">
+      <div id="audioName"></div>
+      <audio id="audioEl" controls autoplay preload="auto"></audio>
+    </div>
+    <video class="pane" id="videoEl" controls autoplay preload="auto" playsinline muted></video>
+    <div class="pane" id="imageBox"><img id="imageEl" alt=""></div>
+    <div class="pane" id="none">
+      <div id="noneName"></div>
+      <button id="openBtn">使用系统应用打开</button>
+    </div>
+  </main>
+  <script>
+    const { ipcRenderer } = require('electron')
+    const fs = require('fs')
+    const path = require('path')
+    const { pathToFileURL } = require('url')
+
+    const TEXT = new Set(['txt','md','markdown','log','json','csv','tsv','xml','yaml','yml','ini','conf','toml',
+      'js','mjs','cjs','ts','tsx','jsx','html','htm','css','scss','less',
+      'py','java','kt','kts','go','c','cpp','cc','h','hpp','cs','rs','rb','php','swift','lua',
+      'sh','bash','zsh','bat','cmd','ps1','sql','gradle','properties','env'])
+    const AUDIO = new Set(['mp3','wav','m4a','aac','flac','ogg','oga','opus'])
+    const VIDEO = new Set(['mp4','m4v','webm','mov','3gp'])
+    const IMAGE = new Set(['jpg','jpeg','png','gif','webp','bmp','ico'])
+
+    const $ = (id) => document.getElementById(id)
+    const panes = ['text','audioBox','videoEl','imageBox','none']
+    const show = (id) => panes.forEach((p) => $(p).classList.toggle('on', p === id))
+
+    function kindOf(ext) {
+      if (TEXT.has(ext)) return 'text'
+      if (AUDIO.has(ext)) return 'audio'
+      if (VIDEO.has(ext)) return 'video'
+      if (IMAGE.has(ext)) return 'image'
+      return 'none'
+    }
+
+    let current = ''
+    let mediaToken = 0
+    let zoom = 1
+    let panX = 0
+    let panY = 0
+
+    let dragging = false
+    let dragX = 0
+    let dragY = 0
+    let dragPanX = 0
+    let dragPanY = 0
+
+    function applyZoom() {
+      $('imageEl').style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`
+      $('imageBox').style.cursor = zoom > 1 ? 'grab' : 'zoom-in'
+    }
+
+    function resetZoom() {
+      zoom = 1
+      panX = 0
+      panY = 0
+      dragging = false
+      applyZoom()
+    }
+
+    function unsupported(name) {
+      $('noneName').textContent = name
+      show('none')
+    }
+
+    function render(data) {
+      if (!data || !data.file) return
+      current = data.file
+      document.body.classList.toggle('dark', data.dark === true)
+      const name = path.basename(data.file)
+      const ext = path.extname(name).toLowerCase().replace('.', '')
+      const kind = kindOf(ext)
+      $('title').textContent = name
+      const audio = $('audioEl')
+      const video = $('videoEl')
+      const image = $('imageEl')
+      const token = ++mediaToken
+      audio.onerror = null
+      video.onerror = null
+      image.onerror = null
+      audio.pause()
+      video.pause()
+      video.muted = true
+      audio.removeAttribute('src')
+      video.removeAttribute('src')
+      image.removeAttribute('src')
+      resetZoom()
+      const url = pathToFileURL(data.file).href
+
+      if (kind === 'text') {
+        let content = ''
+        try {
+          content = fs.readFileSync(data.file, 'utf8')
+        } catch (error) {
+          content = String(error && error.message ? error.message : error)
+        }
+        const LIMIT = 400000
+        if (content.length > LIMIT) content = content.slice(0, LIMIT) + '\n\n（已截断）'
+        $('text').textContent = content
+        $('text').scrollTop = 0
+        show('text')
+      } else if (kind === 'audio') {
+        $('audioName').textContent = name
+        audio.onerror = () => {
+          if (token === mediaToken) unsupported(name)
+        }
+        audio.src = url
+        audio.load()
+        audio.play().catch(() => {})
+        show('audioBox')
+      } else if (kind === 'video') {
+        video.onerror = () => {
+          if (token === mediaToken) unsupported(name)
+        }
+        video.src = url
+        video.load()
+        video.play().catch(() => {})
+        show('videoEl')
+      } else if (kind === 'image') {
+        image.onerror = () => {
+          if (token === mediaToken) unsupported(name)
+        }
+        image.src = url
+        show('imageBox')
+      } else {
+        unsupported(name)
+      }
+    }
+
+    ipcRenderer.on('preview-file', (_event, data) => render(data))
+    $('close').addEventListener('click', () => ipcRenderer.send('preview-close'))
+    $('open').addEventListener('click', () => ipcRenderer.send('preview-open'))
+    $('openBtn').addEventListener('click', () => ipcRenderer.send('preview-open'))
+    $('imageBox').addEventListener('mousedown', (event) => {
+      if (zoom <= 1 || event.button !== 0) return
+      event.preventDefault()
+      dragging = true
+      dragX = event.clientX
+      dragY = event.clientY
+      dragPanX = panX
+      dragPanY = panY
+      $('imageBox').style.cursor = 'grabbing'
+    })
+    window.addEventListener('mousemove', (event) => {
+      if (!dragging || zoom <= 1) return
+      panX = dragPanX + event.clientX - dragX
+      panY = dragPanY + event.clientY - dragY
+      $('imageEl').style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`
+    })
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return
+      dragging = false
+      applyZoom()
+    })
+    $('imageBox').addEventListener('wheel', (event) => {
+      event.preventDefault()
+      const box = $('imageBox')
+      const rect = box.getBoundingClientRect()
+      const cx = rect.width / 2
+      const cy = rect.height / 2
+      const qx = event.clientX - rect.left
+      const qy = event.clientY - rect.top
+      const next = Math.min(8, Math.max(1, zoom * Math.exp(-event.deltaY * 0.0015)))
+      if (next === zoom) return
+      if (next === 1) {
+        panX = 0
+        panY = 0
+      } else {
+        panX = qx - cx - (next / zoom) * (qx - cx - panX)
+        panY = qy - cy - (next / zoom) * (qy - cy - panY)
+      }
+      zoom = next
+      applyZoom()
+    }, { passive: false })
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') ipcRenderer.send('preview-close')
+    })
+  </script>
+</body>
+</html>

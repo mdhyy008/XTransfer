@@ -1,0 +1,99 @@
+{
+  "name": "xtransfer-desktop",
+  "version": "0.1.0-Beta",
+  "private": true,
+  "description": "X互传 Windows 客户端",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:ble": "dotnet publish bluetooth/BleBridge/BleBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o resources/ble",
+    "start": "electron-vite preview",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^9.5.0",
+    "@mui/material": "^9.5.0",
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.10.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.5"
+  },
+  "build": {
+    "appId": "cn.mdhyy.xtransfer",
+    "productName": "X互传",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "resources/tray.png",
+        "to": "tray.png"
+      },
+      {
+        "from": "resources/preview.html",
+        "to": "preview.html"
+      },
+      {
+        "from": "resources/bootstrap.min.css",
+        "to": "bootstrap.min.css"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "resources/xlan/xlan.exe",
+        "to": "xlan/xlan.exe"
+      },
+      {
+        "from": "resources/screenshot/XShot.exe",
+        "to": "screenshot/XShot.exe"
+      },
+      {
+        "from": "resources/ble/BleBridge.exe",
+        "to": "ble/BleBridge.exe"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/node-pty/**/*"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    }
+  }
+}
