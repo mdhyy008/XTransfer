@@ -51,6 +51,7 @@ import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
@@ -90,6 +91,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -119,6 +121,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.mdhyy.xtransfer.XlanApp
 import cn.mdhyy.xtransfer.data.BLE_CONVERSATION_PREFIX
+import cn.mdhyy.xtransfer.data.BLE_FILE_LIMIT
 import cn.mdhyy.xtransfer.data.BucketItem
 import cn.mdhyy.xtransfer.data.ConversationUi
 import cn.mdhyy.xtransfer.data.MessageEntity
@@ -177,6 +180,10 @@ fun DetailScreen(
     val isBle = convId.startsWith(BLE_CONVERSATION_PREFIX)
     val bleManager = (context.applicationContext as XlanApp).ble
     val bleState by bleManager.state.collectAsStateWithLifecycle()
+    val webChat = (context.applicationContext as XlanApp).webChat
+    val webStatus by webChat.status.collectAsStateWithLifecycle()
+    var webOpen by remember { mutableStateOf(false) }
+    var webBusy by remember { mutableStateOf(false) }
     val blePeerId = convId.removePrefix(BLE_CONVERSATION_PREFIX)
     val bleDeviceName = bleState.devices.firstOrNull { it.id == blePeerId }
         ?.name?.takeIf { it.isNotBlank() }
@@ -359,8 +366,21 @@ fun DetailScreen(
             return
         }
         if (!context.ensureStorageAccess()) return
+        if (isBle) {
+            // 图片会先压缩，其余文件按原样发，超过 5 MB 直接拒绝。
+            val blocked = items.firstOrNull {
+                it.kind == "folder" || (it.size > BLE_FILE_LIMIT && !isBleImage(it.name))
+            }
+            if (blocked != null) {
+                context.showError(
+                    if (blocked.kind == "folder") "蓝牙不支持发送文件夹"
+                    else "单个文件不能超过 5 MB"
+                )
+                return
+            }
+        }
         if (!repo.sendBucket(convId, items)) {
-            context.showError("设备不在线")
+            context.showError(if (isBle) "蓝牙未连接" else "设备不在线")
         }
     }
 
@@ -529,6 +549,33 @@ fun DetailScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
+                }
+            }
+            if (isPublic) {
+                Row(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable { webOpen = true }
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Language,
+                        contentDescription = "网页聊天",
+                        tint = if (webStatus.running) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    if (webStatus.online > 0) {
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "${webStatus.online}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -727,10 +774,7 @@ fun DetailScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = formatTime(
-                                    message.createdAt,
-                                    withDate = System.currentTimeMillis() / 1000 - message.createdAt > 86400
-                                ),
+                                text = formatChatTime(message.createdAt),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -859,7 +903,7 @@ fun DetailScreen(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!isPublic && !isBle) {
+                if (!isPublic) {
                     IconButton(onClick = { if (context.ensureStorageAccess()) attachOpen = true }) {
                         Icon(Icons.Rounded.Add, contentDescription = "发送")
                     }
@@ -940,13 +984,15 @@ fun DetailScreen(
                     attachOpen = false
                     filePicker.launch(arrayOf("*/*"))
                 }
-                AttachOption(Icons.Rounded.Folder, "文件夹") {
-                    attachOpen = false
-                    pickFolder()
-                }
-                AttachOption(Icons.Rounded.Apps, "应用软件包") {
-                    attachOpen = false
-                    onOpenApps()
+                if (!isBle) {
+                    AttachOption(Icons.Rounded.Folder, "文件夹") {
+                        attachOpen = false
+                        pickFolder()
+                    }
+                    AttachOption(Icons.Rounded.Apps, "应用软件包") {
+                        attachOpen = false
+                        onOpenApps()
+                    }
                 }
             }
         }
@@ -972,6 +1018,106 @@ fun DetailScreen(
                     openFileExternally(context, path, preview.fileName)
                 }
                 previewTarget = null
+            }
+        )
+    }
+
+    if (webOpen) {
+        val openUrl: (String) -> Unit = { url ->
+            if (url.isNotBlank()) {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { webOpen = false },
+            title = { Text("网页聊天") },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (webStatus.running) "已开启" else "未开启",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = webStatus.running,
+                            enabled = !webBusy,
+                            onCheckedChange = { enabled ->
+                                if (!webBusy) {
+                                    webBusy = true
+                                    scope.launch {
+                                        repo.settingsStore().update(webChat = enabled)
+                                        runCatching {
+                                            if (enabled) webChat.start() else webChat.stop()
+                                        }
+                                        webBusy = false
+                                    }
+                                }
+                            }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "开启后，局域网内的其他人可以用浏览器打开网址，以网页访客身份在公共频道聊天。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (webStatus.running) {
+                        Spacer(Modifier.height(16.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = webStatus.url.ifBlank { "未连接到局域网" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (webStatus.url.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(enabled = webStatus.url.isNotBlank()) {
+                                        openUrl(webStatus.url)
+                                    }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                onClick = { openUrl(webStatus.url) },
+                                enabled = webStatus.url.isNotBlank()
+                            ) { Text("打开") }
+                        }
+                        val qr = remember(webStatus.url) {
+                            webStatus.url.takeIf { it.isNotBlank() }?.let { qrBitmap(it, 512) }
+                        }
+                        if (qr != null) {
+                            Spacer(Modifier.height(12.dp))
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    bitmap = qr.asImageBitmap(),
+                                    contentDescription = "网页地址二维码",
+                                    modifier = Modifier
+                                        .size(200.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                )
+                            }
+                        }
+                    }
+                    webStatus.error?.takeIf { it.isNotBlank() && !webStatus.running }?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { webOpen = false }) { Text("关闭") }
             }
         )
     }
@@ -1645,3 +1791,6 @@ private fun StatusLine(message: MessageEntity, mine: Boolean, missing: Boolean) 
         color = if (message.status == "failed") error else secondary
     )
 }
+
+private fun isBleImage(name: String): Boolean =
+    extensionOf(name) in setOf("jpg", "jpeg", "png", "webp", "bmp", "heic", "heif")

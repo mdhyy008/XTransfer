@@ -3,6 +3,8 @@ package cn.mdhyy.xtransfer.data
 import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
 import android.os.Handler
@@ -19,8 +21,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,14 +30,22 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 data class ConversationUi(
     val id: String,
@@ -81,6 +89,12 @@ const val DEFAULT_RECV_FOLDER = "X互传"
 
 // 入站传输多久没有任何字节进来就判定对方已经退出/取消。
 private const val INBOUND_IDLE_MS = 5_000L
+
+private const val SPEEDTEST_CHUNK = 4L * 1024 * 1024
+private const val SPEEDTEST_SIZE = SPEEDTEST_CHUNK * 2
+private const val SPEEDTEST_PREFIX = "xlan-speedtest-"
+private val SPEEDTEST_JSON = "application/json".toMediaType()
+private val SPEEDTEST_OCTET = "application/octet-stream".toMediaType()
 
 class Repository(
     private val app: Application,
@@ -221,6 +235,39 @@ class Repository(
         manager.onInbound = { fromId, fromName, platform, body, ts ->
             scope.launch {
                 runCatching { insertBleInbound(fromId, fromName, platform, body, ts) }
+            }
+        }
+        manager.onFileOffer = { peerId, id, fromName, platform, name, size, ts ->
+            val accepted = peerId !in settings.value.blocked && size in 1..BLE_FILE_LIMIT
+            if (accepted) {
+                // 必须在放行前先把消息落库，否则第一批进度回调会找不到这一条。
+                runCatching {
+                    runBlocking {
+                        insertBleFilePending(peerId, id, fromName, name, size, ts)
+                    }
+                }.isSuccess
+            } else {
+                false
+            }
+        }
+        manager.onFileProgress = { id, received, total ->
+            scope.launch {
+                runCatching { db.messageDao().setProgress(id, received, total, 0, now()) }
+            }
+        }
+        manager.onFileDone = { id, name, bytes ->
+            scope.launch {
+                runCatching { finishBleFileInbound(id, name, bytes) }
+            }
+        }
+        manager.onFileFailed = { id, reason ->
+            scope.launch {
+                runCatching { db.messageDao().setStatus(id, "failed", reason, now()) }
+            }
+        }
+        manager.onFileSendProgress = { id, sent, total ->
+            scope.launch {
+                runCatching { db.messageDao().setProgress(id, sent, total, 0, now()) }
             }
         }
     }
@@ -427,7 +474,14 @@ class Repository(
         val json = withContext(Dispatchers.IO) { current.get("/v1/inbox?limit=500$suffix") }
         val items = json.optJSONArray("items") ?: JSONArray()
         for (i in 0 until items.length()) {
-            ingestItem(items.getJSONObject(i))
+            val item = items.getJSONObject(i)
+            if (isSpeedtestName(item.optString("name"))) {
+                if (isSpeedtestTerminal(item.optString("status"))) {
+                    dropSpeedtest(item.optString("id"))
+                }
+                continue
+            }
+            ingestItem(item)
         }
     }
 
@@ -460,6 +514,12 @@ class Repository(
                     rejectSilently(item)
                     return
                 }
+                if (isSpeedtestName(item.optString("name"))) {
+                    if (isSpeedtestTerminal(item.optString("status"))) {
+                        dropSpeedtest(item.optString("id"))
+                    }
+                    return
+                }
                 ingestItem(item)
                 notifyInbound(item)
             }
@@ -467,6 +527,10 @@ class Repository(
                 val data = event.optJSONObject("data") ?: return
                 val id = data.optString("id")
                 if (id.isEmpty()) return
+                if (isSpeedtestName(data.optString("name"))) {
+                    if (isSpeedtestTerminal(data.optString("status"))) dropSpeedtest(id)
+                    return
+                }
                 val existing = db.messageDao().get(id)
                 val rawStatus = data.optString("status")
                 val reason = data.optString("reason")
@@ -591,6 +655,25 @@ class Repository(
             runCatching {
                 withContext(Dispatchers.IO) {
                     current.post("/v1/offer/$id/decision", JSONObject().put("action", "reject"))
+                }
+            }
+        }
+    }
+
+    // 对端测速时落下的临时文件：不进消息列表、不通知，传完立刻删掉。
+    private fun isSpeedtestName(name: String): Boolean = name.startsWith(SPEEDTEST_PREFIX)
+
+    private fun isSpeedtestTerminal(status: String): Boolean =
+        status == "done" || status == "failed" || status == "canceled" ||
+            status == "rejected" || status == "expired"
+
+    private fun dropSpeedtest(id: String) {
+        if (id.isEmpty()) return
+        val current = api ?: return
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    current.delete("/v1/item/${Uri.encode(id)}?files=1")
                 }
             }
         }
@@ -908,6 +991,31 @@ class Repository(
         }
     }
 
+    // 网页访客的消息：xlan 自己收到广播后会回传事件，这里先本地落一条，
+    // 事件晚到时按同 id 更新，不会出现两条。
+    suspend fun ingestWebGuestText(id: String, fromId: String, fromName: String, body: String, ts: Long) {
+        if (id.isEmpty()) return
+        val dao = db.messageDao()
+        if (dao.get(id) != null) return
+        ensureConversationNow(PUBLIC_CONVERSATION_ID, PUBLIC_CONVERSATION_NAME)
+        dao.insert(
+            MessageEntity(
+                id = id,
+                conversationId = PUBLIC_CONVERSATION_ID,
+                direction = "in",
+                kind = "text",
+                channel = "public",
+                fromId = fromId,
+                fromName = fromName.takeIf { it.isNotBlank() },
+                body = body,
+                status = "done",
+                createdAt = ts,
+                updatedAt = ts
+            )
+        )
+        db.conversationDao().touch(PUBLIC_CONVERSATION_ID, now())
+    }
+
     private suspend fun sendBleText(peerId: String, body: String) {
         val text = body.trim()
         if (text.isEmpty()) throw IllegalStateException("内容为空")
@@ -987,6 +1095,192 @@ class Repository(
                 convId
             )
         }
+    }
+
+    // ---------- 蓝牙文件 ----------
+
+    private suspend fun insertBleFilePending(
+        fromId: String,
+        id: String,
+        fromName: String,
+        name: String,
+        size: Long,
+        ts: Long
+    ) {
+        if (fromId.isEmpty() || name.isBlank()) return
+        if (fromId in settings.value.blocked) return
+        if (db.messageDao().get(id) != null) return
+        val convId = BLE_CONVERSATION_PREFIX + fromId
+        val createdAt = normalizeTs(ts)
+        ensureConversationNow(convId, fromName.takeIf { it.isNotBlank() } ?: fromId)
+        db.messageDao().insert(
+            MessageEntity(
+                id = id,
+                conversationId = convId,
+                direction = "in",
+                kind = "file",
+                channel = "ble",
+                fromId = fromId,
+                fromName = fromName.takeIf { it.isNotBlank() },
+                fileName = name,
+                fileSize = size,
+                status = "active",
+                total = size,
+                createdAt = createdAt,
+                updatedAt = now()
+            )
+        )
+        db.conversationDao().touch(convId, now())
+    }
+
+    private suspend fun finishBleFileInbound(id: String, name: String, bytes: ByteArray) {
+        val message = db.messageDao().get(id) ?: return
+        val file = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = recvDir
+                dir.mkdirs()
+                val target = uniqueFile(dir, safeFileName(name))
+                target.writeBytes(bytes)
+                target
+            }.getOrNull()
+        }
+        if (file == null) {
+            db.messageDao().setStatus(id, "failed", "写入失败", now())
+            return
+        }
+        db.messageDao().applyItemUpdate(id, "done", file.absolutePath, file.name, bytes.size.toLong(), now())
+        val convId = message.conversationId
+        if (settings.value.notifications && !XlanApp.foreground) {
+            Notifications.message(
+                app,
+                message.fromName?.takeIf { it.isNotBlank() } ?: message.fromId,
+                file.name,
+                convId
+            )
+        }
+    }
+
+    private fun safeFileName(name: String): String {
+        val base = name.substringAfterLast('/').substringAfterLast('\\').trim()
+        return base.replace(Regex("""[\\/:*?"<>|]"""), "_").take(120).ifBlank { "文件" }
+    }
+
+    private fun uniqueFile(dir: File, name: String): File {
+        val base = name.substringBeforeLast('.', name)
+        val ext = name.substringAfterLast('.', "")
+        var candidate = File(dir, name)
+        var index = 1
+        while (candidate.exists()) {
+            candidate = File(dir, if (ext.isEmpty()) "$base ($index)" else "$base ($index).$ext")
+            index += 1
+        }
+        return candidate
+    }
+
+    /** 蓝牙会话里选中的文件，逐个压缩（图片）后发送。 */
+    private suspend fun sendBleFiles(convId: String, items: List<BucketItem>) {
+        val peerId = convId.removePrefix(BLE_CONVERSATION_PREFIX)
+        val manager = ble ?: throw IllegalStateException("蓝牙未启用")
+        if (peerId.isEmpty()) throw IllegalStateException("蓝牙设备为空")
+        val self = _info.value
+        val peerName = manager.state.value.devices.firstOrNull { it.id == peerId }?.name ?: peerId
+        for (item in items) {
+            if (item.kind == "folder") throw IllegalStateException("蓝牙不支持发送文件夹")
+            val raw = readBucketBytes(item) ?: throw IllegalStateException("无法读取「${item.name}」")
+            val (fileName, data) = compressBleImage(item.name, raw)
+            if (data.size.toLong() > BLE_FILE_LIMIT) {
+                throw IllegalStateException("「$fileName」超过 5 MB，请改用局域网")
+            }
+            val id = UUID.randomUUID().toString()
+            val ts = now()
+            // 压缩后的内容存一份到缓存，会话里才能打开/另存为，也方便重试。
+            val localPath = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = File(app.cacheDir, "ble-out").apply { mkdirs() }
+                    File(dir, "$id-${safeFileName(fileName)}").also { it.writeBytes(data) }
+                        .absolutePath
+                }.getOrNull()
+            }
+            ensureConversationNow(convId, peerName)
+            db.messageDao().insert(
+                MessageEntity(
+                    id = id,
+                    conversationId = convId,
+                    direction = "out",
+                    kind = "file",
+                    channel = "ble",
+                    fromId = self?.id ?: "",
+                    fromName = self?.name,
+                    fileName = fileName,
+                    fileSize = data.size.toLong(),
+                    localPath = localPath,
+                    status = "active",
+                    total = data.size.toLong(),
+                    createdAt = ts,
+                    updatedAt = ts
+                )
+            )
+            db.conversationDao().touch(convId, ts)
+            try {
+                manager.sendFile(peerId, id, fileName, data)
+                db.messageDao().setStatus(id, "done", null, now())
+            } catch (error: Exception) {
+                db.messageDao().setStatus(id, "failed", error.message ?: "发送失败", now())
+            }
+        }
+    }
+
+    private fun readBucketBytes(item: BucketItem): ByteArray? = runCatching {
+        val uriText = item.uri
+        if (uriText.startsWith("content://")) {
+            app.contentResolver.openInputStream(Uri.parse(uriText))?.use { it.readBytes() }
+        } else {
+            val path = if (uriText.startsWith("file://")) Uri.parse(uriText).path else uriText
+            File(path ?: return@runCatching null).takeIf { it.isFile }?.readBytes()
+        }
+    }.getOrNull()
+
+    /**
+     * 蓝牙带宽只有几十 KB/s，图片先压一轮再发：最大边 1600、JPEG 80。
+     * 压完反而更大（本来就很小的图）就继续用原图。
+     */
+    private fun compressBleImage(name: String, bytes: ByteArray): Pair<String, ByteArray> {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        if (ext !in setOf("jpg", "jpeg", "png", "webp", "bmp", "heic", "heif")) return name to bytes
+        // 2 MB 以内的图片原样发送，只有大图才值得压一轮。
+        if (bytes.size <= 2 * 1024 * 1024) return name to bytes
+        if (bytes.size > 24 * 1024 * 1024) return name to bytes
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return name to bytes
+            var sample = 1
+            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+            val decoded = BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            ) ?: return name to bytes
+            val edge = maxOf(decoded.width, decoded.height)
+            val bitmap = if (edge > 1600) {
+                val ratio = 1600f / edge
+                Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * ratio).toInt().coerceAtLeast(1),
+                    (decoded.height * ratio).toInt().coerceAtLeast(1),
+                    true
+                )
+            } else {
+                decoded
+            }
+            val out = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+            if (bitmap !== decoded) decoded.recycle()
+            bitmap.recycle()
+            val result = out.toByteArray()
+            if (result.isEmpty() || result.size >= bytes.size) return name to bytes
+            val base = name.substringBeforeLast('.', name)
+            "$base.jpg" to result
+        }.getOrDefault(name to bytes)
     }
 
     private fun normalizeTs(ts: Long): Long =
@@ -1155,7 +1449,8 @@ class Repository(
         refreshPeers()
     }
 
-    // 5 秒测速：向对端反复拉取公共频道历史（只读接口），每秒取一个样本，5 个样本的平均值作为结果。
+    // 真实文件传输测速：向对端发一个 8MiB 的临时文件，5 秒内 4 个线程反复写前半段保持传输活跃，
+    // 最后补传后半段让对端落盘；对端识别到测速文件名后不入库、直接删除。
     suspend fun speedTest(
         peerId: String,
         onSample: (Long) -> Unit = {}
@@ -1164,58 +1459,97 @@ class Repository(
             ?: throw IllegalStateException("设备不在线")
         val base = peerBaseUrl(peer) ?: throw IllegalStateException("设备不在线")
         val client = peerClient()
+        val info = _info.value
+        val offerBody = JSONObject()
+            .put("from_id", info?.id ?: "")
+            .put("from_name", info?.name ?: "")
+            .put("to_id", peerId)
+            .put("kind", "file")
+            .put("name", "$SPEEDTEST_PREFIX${System.currentTimeMillis()}.bin")
+            .put("size", SPEEDTEST_SIZE)
+        val offer = withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url("$base/v1/offer")
+                .post(offerBody.toString().toRequestBody(SPEEDTEST_JSON))
+                .build()
+            client.newCall(request).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                JSONObject(text)
+            }
+        }
+        val offerId = offer.optString("id")
+        if (offerId.isEmpty()) throw IllegalStateException("对端没有返回传输编号")
+        if (!offer.optBoolean("accepted") && !offer.optBoolean("duplicate")) {
+            var accepted = false
+            val until = System.currentTimeMillis() + 6_000
+            while (System.currentTimeMillis() < until) {
+                delay(400)
+                val status = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val request = Request.Builder()
+                            .url("$base/v1/offer/$offerId")
+                            .get()
+                            .build()
+                        client.newCall(request).execute().use { resp ->
+                            JSONObject(resp.body?.string().orEmpty()).optString("status")
+                        }
+                    }
+                }.getOrDefault("")
+                if (status == "active" || status == "done") {
+                    accepted = true
+                    break
+                }
+                if (status == "failed" || status == "expired") break
+            }
+            if (!accepted) throw IllegalStateException("对方未接受测速文件（需对方信任本机）")
+        }
+
+        val url = "$base/v1/offer/$offerId/data"
+        val block = ByteArray(SPEEDTEST_CHUNK.toInt())
+        val total = AtomicLong(0)
         val deadline = System.currentTimeMillis() + 5_000
-        var total = 0L
-        var peak = 0L
         val samples = ArrayList<Long>(5)
-        val mutex = Mutex()
+
+        suspend fun upload(start: Long, end: Long) {
+            val body = CountingBody(block, SPEEDTEST_OCTET) { n -> total.addAndGet(n.toLong()) }
+            val request = Request.Builder()
+                .url(url)
+                .put(body)
+                .header("Content-Range", "bytes $start-$end/$SPEEDTEST_SIZE")
+                .build()
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("上传失败：HTTP ${resp.code}")
+                }
+            }
+        }
+
         withContext(Dispatchers.IO) {
             coroutineScope {
                 repeat(4) {
                     launch {
                         while (System.currentTimeMillis() < deadline) {
-                            val started = System.currentTimeMillis()
-                            val bytes = runCatching {
-                                client.newCall(
-                                    Request.Builder()
-                                        .url("$base/v1/public/history?limit=5000")
-                                        .build()
-                                ).execute().use { response ->
-                                    if (response.isSuccessful) {
-                                        response.body?.bytes()?.size?.toLong() ?: 0L
-                                    } else {
-                                        -1L
-                                    }
-                                }
-                            }.getOrDefault(-1L)
-                            if (bytes < 0) {
-                                delay(100)
-                                continue
-                            }
-                            val elapsed =
-                                ((System.currentTimeMillis() - started).coerceAtLeast(50)) / 1000.0
-                            mutex.withLock {
-                                total += bytes
-                                peak = maxOf(peak, (bytes / elapsed).toLong())
-                            }
+                            upload(0, SPEEDTEST_CHUNK - 1)
                         }
                     }
                 }
                 var lastBytes = 0L
                 repeat(5) {
-                    delay(1000)
-                    val sample = mutex.withLock {
-                        val delta = total - lastBytes
-                        lastBytes = total
-                        delta
-                    }
+                    delay(1_000)
+                    val now = total.get()
+                    val sample = (now - lastBytes).coerceAtLeast(0)
+                    lastBytes = now
                     samples += sample
                     withContext(Dispatchers.Main) { onSample(sample) }
                 }
             }
+            upload(SPEEDTEST_CHUNK, SPEEDTEST_SIZE - 1)
         }
+        val bytes = total.get()
+        val peak = samples.maxOrNull() ?: 0L
         val avg = if (samples.isEmpty()) 0L else samples.sum() / samples.size
-        return SpeedTestResult(peak = peak, avg = avg, bytes = total, samples = samples)
+        return SpeedTestResult(peak = peak, avg = avg, bytes = bytes, samples = samples)
     }
 
     suspend fun setDeviceName(name: String) {
@@ -1293,6 +1627,12 @@ class Repository(
 
     fun sendBucket(peerId: String, items: List<BucketItem>): Boolean {
         if (items.isEmpty()) return false
+        if (peerId.startsWith(BLE_CONVERSATION_PREFIX)) {
+            scope.launch { runCatching { sendBleFiles(peerId, items) } }
+            // 文件已经交给发送队列，暂存桶随即清空。
+            clearBucket()
+            return true
+        }
         val peer = _peers.value.find { it.id == peerId } ?: return false
         val started = sender.send(peer, items)
         // 文件已经交给发送队列，暂存桶随即清空。
@@ -1301,6 +1641,12 @@ class Repository(
     }
 
     fun cancelSend(messageId: String) {
+        val message = messages.value.firstOrNull { it.id == messageId }
+        if (message?.channel == "ble") {
+            ble?.cancelFile(messageId)
+            scope.launch { db.messageDao().setStatus(messageId, "canceled", null, now()) }
+            return
+        }
         sender.cancel(messageId)
     }
 
@@ -1309,7 +1655,28 @@ class Repository(
             retryText(message)
             return
         }
+        if (message.conversationId.startsWith(BLE_CONVERSATION_PREFIX)) {
+            retryBleFile(message)
+            return
+        }
         sender.retry(message)
+    }
+
+    private suspend fun retryBleFile(message: MessageEntity) {
+        val manager = ble ?: throw IllegalStateException("蓝牙未启用")
+        val path = message.localPath ?: throw IllegalStateException("文件不存在")
+        val peerId = message.conversationId.removePrefix(BLE_CONVERSATION_PREFIX)
+        val data = withContext(Dispatchers.IO) {
+            runCatching { File(path).readBytes() }.getOrNull()
+        } ?: throw IllegalStateException("文件不存在")
+        db.messageDao().setStatus(message.id, "active", null, now())
+        try {
+            manager.sendFile(peerId, message.id, message.fileName ?: File(path).name, data)
+            db.messageDao().setStatus(message.id, "done", null, now())
+        } catch (error: Exception) {
+            db.messageDao().setStatus(message.id, "failed", error.message ?: "发送失败", now())
+            throw error
+        }
     }
 
     suspend fun retryText(message: MessageEntity) {
@@ -1392,3 +1759,25 @@ class Repository(
 }
 
 data class CacheCleanResult(val parts: Int, val freedBytes: Long, val records: Int)
+
+// 边写边上报已发出的字节数，测速的每秒样本才不会因为整块传完才计数而忽高忽低。
+private class CountingBody(
+    private val bytes: ByteArray,
+    private val type: MediaType?,
+    private val onBytes: (Int) -> Unit
+) : RequestBody() {
+    override fun contentType(): MediaType? = type
+
+    override fun contentLength(): Long = bytes.size.toLong()
+
+    override fun writeTo(sink: BufferedSink) {
+        val step = 64 * 1024
+        var off = 0
+        while (off < bytes.size) {
+            val n = minOf(step, bytes.size - off)
+            sink.write(bytes, off, n)
+            off += n
+            onBytes(n)
+        }
+    }
+}

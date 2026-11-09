@@ -16,6 +16,7 @@ data class AppSettings(
     val quickPreview: Boolean = true,
     val enterToSend: Boolean = false,
     val misans: Boolean = true,
+    val webChat: Boolean = false,
     val blocked: Set<String> = emptySet(),
     val aliases: Map<String, String> = emptyMap(),
     val muted: Set<String> = emptySet(),
@@ -36,6 +37,7 @@ class SettingsStore(context: Context) {
             quickPreview = prefs.getBoolean("quickPreview", true),
             enterToSend = prefs.getBoolean("enterToSend", false),
             misans = prefs.getBoolean("misans", true),
+            webChat = prefs.getBoolean("webChat", false),
             blocked = prefs.getStringSet("blocked", emptySet()) ?: emptySet(),
             aliases = readAliases(prefs.getString("aliases", null)),
             muted = prefs.getStringSet("muted", emptySet()) ?: emptySet(),
@@ -54,6 +56,7 @@ class SettingsStore(context: Context) {
         quickPreview: Boolean? = null,
         enterToSend: Boolean? = null,
         misans: Boolean? = null,
+        webChat: Boolean? = null,
         blocked: Set<String>? = null,
         aliases: Map<String, String>? = null,
         muted: Set<String>? = null,
@@ -70,6 +73,7 @@ class SettingsStore(context: Context) {
             quickPreview = quickPreview ?: current.quickPreview,
             enterToSend = enterToSend ?: current.enterToSend,
             misans = misans ?: current.misans,
+            webChat = webChat ?: current.webChat,
             blocked = blocked ?: current.blocked,
             aliases = aliases ?: current.aliases,
             muted = muted ?: current.muted,
@@ -85,6 +89,7 @@ class SettingsStore(context: Context) {
             .putBoolean("quickPreview", next.quickPreview)
             .putBoolean("enterToSend", next.enterToSend)
             .putBoolean("misans", next.misans)
+            .putBoolean("webChat", next.webChat)
             .putStringSet("blocked", next.blocked)
             .putString("aliases", JSONObject(next.aliases).toString())
             .putStringSet("muted", next.muted)

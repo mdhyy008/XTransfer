@@ -108,6 +108,13 @@ interface MessageDao {
     suspend fun allFileMessages(): List<MessageEntity>
 
     @Query(
+        """SELECT * FROM messages WHERE conversationId = :convId AND kind = 'text'
+             AND status != 'failed'
+           ORDER BY createdAt DESC, updatedAt DESC LIMIT :limit"""
+    )
+    suspend fun recentTexts(convId: String, limit: Int): List<MessageEntity>
+
+    @Query(
         """SELECT * FROM messages WHERE conversationId = :convId AND direction = 'out'
              AND kind = 'text' AND body = :body AND createdAt >= :since
            ORDER BY createdAt DESC LIMIT 1"""

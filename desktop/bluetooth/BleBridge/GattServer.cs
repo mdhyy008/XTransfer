@@ -18,7 +18,7 @@ internal sealed class GattServer
     private readonly SemaphoreSlim _notifyLock = new(1, 1);
 
     public event Action<string, bool>? SessionChanged;
-    public event Action<string, string>? FrameReceived;
+    public event Action<string, byte[]>? FrameReceived;
 
     public GattServer(string selfId, string selfName)
     {
@@ -196,6 +196,25 @@ internal sealed class GattServer
     }
 
     public bool HasSubscriber => (_tx?.SubscribedClients.Count ?? 0) > 0;
+
+    // 一个通知包能带的最大属性值，用来把文件数据块压进单个 ATT 包。
+    public int MaxNotificationSize
+    {
+        get
+        {
+            var clients = _tx?.SubscribedClients;
+            if (clients == null) return 0;
+            var size = 0;
+            foreach (var client in clients)
+            {
+                var chunk = (int)client.MaxNotificationSize;
+                if (chunk <= 3) continue;
+                if (chunk > 512) chunk = 512;
+                if (size == 0 || chunk < size) size = chunk;
+            }
+            return size;
+        }
+    }
 
     public async Task<bool> NotifyAsync(byte[] data)
     {

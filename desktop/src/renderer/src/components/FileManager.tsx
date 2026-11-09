@@ -252,7 +252,28 @@ export default function FileManager({
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1.5, pb: 2 }}>
         {groups.length === 0 ? (
-          <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}>
+          <Box
+            sx={{
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 1.5
+            }}
+          >
+            <Box
+              sx={{
+                width: 104,
+                height: 104,
+                borderRadius: '50%',
+                bgcolor: 'action.hover',
+                display: 'grid',
+                placeItems: 'center'
+              }}
+            >
+              <FolderRounded sx={{ fontSize: 44, color: 'text.disabled' }} />
+            </Box>
             <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>暂无文件</Typography>
           </Box>
         ) : (

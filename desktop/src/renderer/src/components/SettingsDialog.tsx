@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import QRCode from 'qrcode'
 import {
   Box,
   Button,
@@ -43,6 +44,7 @@ import DeleteSweepRounded from '@mui/icons-material/DeleteSweepRounded'
 import WindowRounded from '@mui/icons-material/WindowRounded'
 import PowerSettingsNewRounded from '@mui/icons-material/PowerSettingsNewRounded'
 import InfoRounded from '@mui/icons-material/InfoRounded'
+import LinkRounded from '@mui/icons-material/LinkRounded'
 import PersonRounded from '@mui/icons-material/PersonRounded'
 import PublicRounded from '@mui/icons-material/PublicRounded'
 import VisibilityRounded from '@mui/icons-material/VisibilityRounded'
@@ -55,6 +57,7 @@ import PlatformIcon from './PlatformIcon'
 import { useRetained } from './useRetained'
 
 const OPEN_SOURCE: [string, string, string?][] = [
+  ['X互传', 'MIT', 'https://github.com/mdhyy008/xlan-client'],
   ['xlan', 'MIT', 'https://github.com/mdhyy008/xlan'],
   ['Electron', 'MIT'],
   ['React', 'MIT'],
@@ -226,8 +229,16 @@ export default function SettingsDialog({
   const [clearOfflineOpen, setClearOfflineOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackQr, setFeedbackQr] = useState('')
   const [chatChecked, setChatChecked] = useState<string[]>([])
   const [bleBusy, setBleBusy] = useState(false)
+
+  useEffect(() => {
+    if (!feedbackOpen) return
+    QRCode.toDataURL('https://pd.qq.com/s/gtvdapxfn?b=9', { width: 320, margin: 1 })
+      .then(setFeedbackQr)
+      .catch(() => {})
+  }, [feedbackOpen])
 
   const settings = snapshot?.settings
   const config = snapshot?.config
@@ -416,6 +427,7 @@ export default function SettingsDialog({
               <Row
                 icon={<BluetoothRounded fontSize="small" />}
                 title="蓝牙广播"
+                description={`蓝牙 ${snapshot?.bluetooth.version || '未知'} · ${snapshot?.bluetooth.address ? `MAC ${snapshot.bluetooth.address}` : 'MAC地址获取失败'}`}
                 trailing={
                   <ToggleSwitch
                     checked={snapshot?.bluetooth.on === true}
@@ -850,6 +862,16 @@ export default function SettingsDialog({
               频道链接：pd.qq.com/s/gtvdapxfn
             </Typography>
           </Box>
+          {feedbackQr && (
+            <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+              <Box
+                component="img"
+                src={feedbackQr}
+                alt="频道二维码"
+                sx={{ width: 160, height: 160, borderRadius: 2 }}
+              />
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setFeedbackOpen(false)}>关闭</Button>
@@ -915,6 +937,23 @@ export default function SettingsDialog({
               }}
             >
               mdhyy.cn
+            </Typography>
+          </Box>
+          <Divider />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
+            <LinkRounded fontSize="small" sx={{ color: 'text.secondary' }} />
+            <Typography variant="body2" sx={{ flex: 1 }}>
+              官网
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ cursor: 'pointer' }}
+              onClick={() => {
+                window.xt.openExternal('https://mdhyy.cn/tools/page/x-transfer/').catch(() => {})
+              }}
+            >
+              mdhyy.cn/tools/page/x-transfer
             </Typography>
           </Box>
           <Typography

@@ -32,14 +32,21 @@ import InsertDriveFileRounded from '@mui/icons-material/InsertDriveFileRounded'
 import MovieRounded from '@mui/icons-material/MovieRounded'
 import PhotoLibraryRounded from '@mui/icons-material/PhotoLibraryRounded'
 import PictureAsPdfRounded from '@mui/icons-material/PictureAsPdfRounded'
+import LanguageRounded from '@mui/icons-material/LanguageRounded'
 import MoreVertRounded from '@mui/icons-material/MoreVertRounded'
 import ReplayRounded from '@mui/icons-material/ReplayRounded'
 import ScreenshotRounded from '@mui/icons-material/ScreenshotRounded'
 import SendRounded from '@mui/icons-material/SendRounded'
 import StopCircleRounded from '@mui/icons-material/StopCircleRounded'
-import type { BleState, Conversation, FileEntry, Message } from '../../../shared/types'
+import type {
+  BleState,
+  Conversation,
+  FileEntry,
+  Message,
+  WebChatStatus
+} from '../../../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../../../shared/types'
-import { describeError, formatSize, formatTime } from '../model'
+import { describeError, formatChatTime, formatSize, formatTime } from '../model'
 import { useRetained } from './useRetained'
 import { useRightClickDismiss } from './useRightClickDismiss'
 
@@ -570,6 +577,10 @@ export default function ChatPane({
   const [aliasDraft, setAliasDraft] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [webOpen, setWebOpen] = useState(false)
+  const [webBusy, setWebBusy] = useState(false)
+  const [webStatus, setWebStatus] = useState<WebChatStatus | null>(null)
+  const [webQr, setWebQr] = useState('')
   const listRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -594,6 +605,7 @@ export default function ChatPane({
   const deleteShown = useRetained(confirmDelete)
   const infoShown = useRetained(infoTarget)
   const trustShown = useRetained(trustAnchor)
+  const webShown = useRetained(webStatus)
 
   useEffect(() => {
     setBody('')
@@ -815,6 +827,56 @@ export default function ChatPane({
   }
 
   const isPublic = conv.id === PUBLIC_CONVERSATION_ID
+  const webUrl = webStatus?.running ? webStatus.url : ''
+  const webOnline = webStatus?.running ? (webStatus.online ?? 0) : 0
+
+  useEffect(() => {
+    if (!isPublic) return
+    let alive = true
+    const pull = (): void => {
+      window.xt
+        .webChatStatus()
+        .then((status) => {
+          if (alive) setWebStatus(status)
+        })
+        .catch(() => {})
+    }
+    pull()
+    const timer = window.setInterval(pull, 3000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [isPublic])
+
+  useEffect(() => {
+    if (!webOpen || !webUrl) return
+    let alive = true
+    void import('qrcode')
+      .then((mod) => mod.toDataURL(webUrl, { width: 480, margin: 1, errorCorrectionLevel: 'M' }))
+      .then((data) => {
+        if (alive) setWebQr(data)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [webOpen, webUrl])
+
+  const toggleWeb = async (enabled: boolean): Promise<void> => {
+    if (webBusy) return
+    setWebBusy(true)
+    try {
+      const next = enabled ? await window.xt.webChatStart() : await window.xt.webChatStop()
+      setWebStatus(next)
+      if (enabled && next.error) notify(next.error, 'warning')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '操作失败', 'error')
+    } finally {
+      setWebBusy(false)
+    }
+  }
+
   const keyword = searchQuery.trim().toLowerCase()
   const visibleMessages = keyword
     ? messages.filter(
@@ -832,6 +894,72 @@ export default function ChatPane({
     (label) => `${bucketCounts.get(label)}个${label}`
   )
   const bucketLabel = `桶中 ${bucketParts.join('，')}`
+
+  const menuMessage = menuShown?.message
+  const menuIsText = menuMessage?.kind === 'text'
+  const menuIsAttach = menuMessage !== undefined && menuMessage.kind !== 'text'
+  const menuHasPath = !!menuMessage?.local_path
+  const menuCanSaveAs =
+    menuMessage?.kind === 'file' && menuHasPath && !menuShown?.missing
+  const menuCanOpenWith = menuIsAttach && menuHasPath && !menuShown?.missing
+  const menuCanCancel =
+    menuMessage !== undefined &&
+    menuMessage.direction === 'out' &&
+    menuIsAttach &&
+    (menuMessage.status === 'queued' ||
+      menuMessage.status === 'sending' ||
+      menuMessage.status === 'active' ||
+      menuMessage.status === 'accepted')
+  const menuCanRetry =
+    menuMessage !== undefined &&
+    menuMessage.direction === 'out' &&
+    menuIsAttach &&
+    menuMessage.status === 'failed' &&
+    menuHasPath &&
+    !menuShown?.missing
+  const menuCanDelete = menuMessage !== undefined && !isSendingMessage(menuMessage)
+
+  const messageMenuItems: React.ReactNode[] = []
+  if (menuIsText && menuMessage) {
+    messageMenuItems.push(<MenuItem onClick={() => copyText(menuMessage)}>复制文本</MenuItem>)
+  }
+  if (!menuIsText && menuHasPath && menuMessage) {
+    messageMenuItems.push(<MenuItem onClick={() => copyPath(menuMessage)}>复制文件路径</MenuItem>)
+  }
+  if (menuIsAttach && menuMessage) {
+    messageMenuItems.push(
+      <MenuItem
+        onClick={() => {
+          setInfoTarget(menuMessage)
+          closeMenu()
+        }}
+      >
+        查看文件信息
+      </MenuItem>
+    )
+  }
+  if (menuCanSaveAs && menuMessage) {
+    messageMenuItems.push(<MenuItem onClick={() => saveAs(menuMessage)}>另存为…</MenuItem>)
+  }
+  if (menuCanOpenWith && menuMessage) {
+    messageMenuItems.push(
+      <MenuItem onClick={() => openWithOther(menuMessage)}>用其他应用打开</MenuItem>
+    )
+    messageMenuItems.push(
+      <MenuItem onClick={() => revealFile(menuMessage)}>打开所在文件夹</MenuItem>
+    )
+  }
+  if (menuCanCancel && menuMessage) {
+    messageMenuItems.push(<MenuItem onClick={() => cancelSend(menuMessage)}>取消发送</MenuItem>)
+  }
+  if (menuCanRetry && menuMessage) {
+    messageMenuItems.push(<MenuItem onClick={() => retrySend(menuMessage)}>重试</MenuItem>)
+  }
+  if (menuCanDelete && menuMessage) {
+    messageMenuItems.push(
+      <MenuItem onClick={() => askDelete(menuMessage, !!menuShown?.missing)}>删除</MenuItem>
+    )
+  }
 
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
@@ -931,6 +1059,29 @@ export default function ChatPane({
           </Box>
         </Box>
         <Box sx={{ flex: 1 }} />
+        {isPublic && (
+          <Tooltip title="网页聊天">
+            <IconButton
+              size="small"
+              onClick={() => setWebOpen(true)}
+              sx={{
+                color: webStatus?.running ? 'primary.main' : 'inherit',
+                gap: 0.5,
+                px: webOnline > 0 ? 1 : undefined
+              }}
+            >
+              <LanguageRounded fontSize="small" />
+              {webOnline > 0 && (
+                <Typography
+                  component="span"
+                  sx={{ fontSize: 12, fontWeight: 600, lineHeight: 1 }}
+                >
+                  {webOnline}
+                </Typography>
+              )}
+            </IconButton>
+          </Tooltip>
+        )}
         {(isPublic || isBle || trusted !== undefined) && (
           <>
             <IconButton size="small" onClick={(event) => setTrustAnchor(event.currentTarget)}>
@@ -940,6 +1091,15 @@ export default function ChatPane({
               anchorEl={trustShown}
               open={trustAnchor !== null}
               onClose={() => setTrustAnchor(null)}
+              slotProps={{
+                paper: {
+                  sx: {
+                    minWidth: 180,
+                    borderRadius: '14px',
+                    '& .MuiMenuItem-root': { minHeight: 32, py: 0, fontSize: 14 }
+                  }
+                }
+              }}
             >
               {isPublic ? (
                 <>
@@ -948,8 +1108,9 @@ export default function ChatPane({
                     // 开关项点文字、点开关都只切换状态，都不关菜单。
                     onClick={() => onSetPublicNotify(!publicNotify)}
                   >
-                    <Typography sx={{ flex: 1 }}>允许通知</Typography>
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>允许通知</Typography>
                     <Switch
+                      size="small"
                       edge="end"
                       checked={!!publicNotify}
                       onClick={(event) => event.stopPropagation()}
@@ -973,14 +1134,16 @@ export default function ChatPane({
                     // 开关项点文字、点开关都只切换状态，都不关菜单。
                     onClick={() => onSetMuted(!muted)}
                   >
-                    <Typography sx={{ flex: 1 }}>免打扰</Typography>
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
                     <Switch
+                      size="small"
                       edge="end"
                       checked={!!muted}
                       onClick={(event) => event.stopPropagation()}
                       onChange={(event) => onSetMuted(event.target.checked)}
                     />
                   </MenuItem>
+                  <Divider />
                   <MenuItem
                     onClick={() => {
                       setTrustAnchor(null)
@@ -990,6 +1153,7 @@ export default function ChatPane({
                   >
                     修改备注
                   </MenuItem>
+                  <Divider />
                   <MenuItem
                     onClick={() => {
                       setTrustAnchor(null)
@@ -1016,8 +1180,9 @@ export default function ChatPane({
                     // 开关项点文字、点开关都只切换状态，都不关菜单。
                     onClick={() => onSetClipboard(!clipboardOn)}
                   >
-                    <Typography sx={{ flex: 1 }}>接收跨设备复制</Typography>
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>接收跨设备复制</Typography>
                     <Switch
+                      size="small"
                       edge="end"
                       checked={!!clipboardOn}
                       onClick={(event) => event.stopPropagation()}
@@ -1028,26 +1193,30 @@ export default function ChatPane({
                     sx={{ gap: 2, pr: 1 }}
                     onClick={() => onSetTrust(!trusted)}
                   >
-                    <Typography sx={{ flex: 1 }}>自动接收文件</Typography>
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>自动接收文件</Typography>
                     <Switch
+                      size="small"
                       edge="end"
                       checked={!!trusted}
                       onClick={(event) => event.stopPropagation()}
                       onChange={(event) => onSetTrust(event.target.checked)}
                     />
                   </MenuItem>
+                  <Divider />
                   <MenuItem
                     sx={{ gap: 2, pr: 1 }}
                     onClick={() => onSetMuted(!muted)}
                   >
-                    <Typography sx={{ flex: 1 }}>免打扰</Typography>
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
                     <Switch
+                      size="small"
                       edge="end"
                       checked={!!muted}
                       onClick={(event) => event.stopPropagation()}
                       onChange={(event) => onSetMuted(event.target.checked)}
                     />
                   </MenuItem>
+                  <Divider />
                   <MenuItem
                     onClick={() => {
                       setTrustAnchor(null)
@@ -1057,6 +1226,7 @@ export default function ChatPane({
                   >
                     修改备注
                   </MenuItem>
+                  <Divider />
                   <MenuItem
                     onClick={() => {
                       setTrustAnchor(null)
@@ -1133,7 +1303,7 @@ export default function ChatPane({
                 {showTime && (
                   <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.25 }}>
                     <Typography sx={{ fontSize: 11.5, color: 'text.secondary' }}>
-                      {formatTime(stamp, Date.now() / 1000 - stamp > 86400)}
+                      {formatChatTime(stamp)}
                     </Typography>
                   </Box>
                 )}
@@ -1159,7 +1329,7 @@ export default function ChatPane({
       </Box>
 
       <Box sx={{ px: 2.5, pb: 2, pt: 1.25, borderTop: 1, borderColor: 'divider' }}>
-        {!isPublic && !isBle && (
+        {!isPublic && (
           <Box
             sx={{
               display: 'flex',
@@ -1172,7 +1342,7 @@ export default function ChatPane({
           >
             <Tooltip title="截图">
               <span>
-                <IconButton size="small" disabled={!serviceRunning} onClick={onScreenshot}>
+                <IconButton size="small" disabled={!transportReady} onClick={onScreenshot}>
                   <ScreenshotRounded sx={{ fontSize: 18 }} />
                 </IconButton>
               </span>
@@ -1181,7 +1351,7 @@ export default function ChatPane({
               <span>
                 <IconButton
                   size="small"
-                  disabled={!serviceRunning}
+                  disabled={!transportReady}
                   onClick={() => onPickAndSend('media')}
                 >
                   <PhotoLibraryRounded sx={{ fontSize: 18 }} />
@@ -1192,24 +1362,26 @@ export default function ChatPane({
               <span>
                 <IconButton
                   size="small"
-                  disabled={!serviceRunning}
+                  disabled={!transportReady}
                   onClick={() => onPickAndSend('files')}
                 >
                   <InsertDriveFileRounded sx={{ fontSize: 18 }} />
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip title="文件夹">
-              <span>
-                <IconButton
-                  size="small"
-                  disabled={!serviceRunning}
-                  onClick={() => onPickAndSend('folders')}
-                >
-                  <FolderRounded sx={{ fontSize: 18 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
+            {!isBle && (
+              <Tooltip title="文件夹">
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={!transportReady}
+                    onClick={() => onPickAndSend('folders')}
+                  >
+                    <FolderRounded sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Box sx={{ flex: 1 }} />
             {recvDir && (
               <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, maxWidth: 280 }}>
@@ -1353,65 +1525,22 @@ export default function ChatPane({
         onClose={closeMenu}
         anchorReference="anchorPosition"
         anchorPosition={menuShown ? { top: menuShown.y, left: menuShown.x } : undefined}
-        slotProps={{ paper: { sx: { minWidth: 180, borderRadius: '14px' } } }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 180,
+              borderRadius: '14px',
+              '& .MuiMenuItem-root': { minHeight: 32, py: 0, fontSize: 14 }
+            }
+          }
+        }}
       >
-        {menuShown !== null && menuShown.message.kind === 'text' && (
-          <MenuItem onClick={() => copyText(menuShown.message)}>复制文本</MenuItem>
-        )}
-        {menuShown !== null && menuShown.message.kind !== 'text' && menuShown.message.local_path && (
-          <MenuItem onClick={() => copyPath(menuShown.message)}>复制文件路径</MenuItem>
-        )}
-        {menuShown !== null && menuShown.message.kind !== 'text' && (
-          <MenuItem
-            onClick={() => {
-              setInfoTarget(menuShown.message)
-              closeMenu()
-            }}
-          >
-            查看文件信息
-          </MenuItem>
-        )}
-        {menuShown !== null &&
-          menuShown.message.kind === 'file' &&
-          !menuShown.missing &&
-          menuShown.message.local_path && (
-            <MenuItem onClick={() => saveAs(menuShown.message)}>另存为…</MenuItem>
-          )}
-        {menuShown !== null &&
-          !menuShown.missing &&
-          menuShown.message.kind !== 'text' &&
-          menuShown.message.local_path && (
-            <MenuItem onClick={() => openWithOther(menuShown.message)}>用其他应用打开</MenuItem>
-          )}
-        {menuShown !== null &&
-          !menuShown.missing &&
-          menuShown.message.kind !== 'text' &&
-          menuShown.message.local_path && (
-            <MenuItem onClick={() => revealFile(menuShown.message)}>打开所在文件夹</MenuItem>
-          )}
-        {menuShown !== null &&
-          menuShown.message.direction === 'out' &&
-          menuShown.message.kind !== 'text' &&
-          (menuShown.message.status === 'queued' ||
-            menuShown.message.status === 'sending' ||
-            menuShown.message.status === 'active' ||
-            menuShown.message.status === 'accepted') && (
-            <MenuItem onClick={() => cancelSend(menuShown.message)}>取消发送</MenuItem>
-          )}
-        {menuShown !== null &&
-          !menuShown.missing &&
-          menuShown.message.direction === 'out' &&
-          menuShown.message.kind !== 'text' &&
-          menuShown.message.status === 'failed' &&
-          menuShown.message.local_path && (
-            <MenuItem onClick={() => retrySend(menuShown.message)}>重试</MenuItem>
-          )}
-        {menuShown !== null && !isSendingMessage(menuShown.message) && (
-          <>
-            <Divider />
-            <MenuItem onClick={() => askDelete(menuShown.message, menuShown.missing)}>删除</MenuItem>
-          </>
-        )}
+        {messageMenuItems.map((item, index) => (
+          <Fragment key={index}>
+            {index > 0 && <Divider />}
+            {item}
+          </Fragment>
+        ))}
       </Menu>
 
       <Dialog open={confirmDelete !== null} onClose={() => setConfirmDelete(null)}>
@@ -1507,6 +1636,90 @@ export default function ChatPane({
           >
             清空
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={webOpen} onClose={() => setWebOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>网页聊天</DialogTitle>
+        <DialogContent sx={{ minWidth: 380, pt: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Typography sx={{ flex: 1, fontSize: 14 }}>
+              {webShown?.running ? '已开启' : '未开启'}
+            </Typography>
+            <Switch
+              checked={!!webStatus?.running}
+              disabled={webBusy}
+              onChange={(event) => void toggleWeb(event.target.checked)}
+            />
+          </Box>
+          <Typography sx={{ mt: 0.5, fontSize: 12.5, color: 'text.secondary' }}>
+            开启后，局域网内的其他人可以用浏览器打开网址，以网页访客身份在公共频道聊天。
+          </Typography>
+          {webShown?.running && (
+            <>
+              <Box
+                sx={{
+                  mt: 1.5,
+                  pl: 1.5,
+                  pr: 0.5,
+                  py: 0.5,
+                  borderRadius: '12px',
+                  bgcolor: 'action.hover',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1
+                }}
+              >
+                <Box
+                  component="a"
+                  href={webShown.url}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    void window.xt.openExternal(webShown.url).catch(() => {})
+                  }}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 13,
+                    wordBreak: 'break-all',
+                    color: 'primary.main',
+                    textDecoration: 'none',
+                    cursor: 'pointer',
+                    '&:hover': { textDecoration: 'underline' }
+                  }}
+                >
+                  {webShown.url}
+                </Box>
+                <Button
+                  size="small"
+                  sx={{ flexShrink: 0, minWidth: 0 }}
+                  onClick={() => {
+                    void window.xt.openExternal(webShown.url).catch(() => {})
+                  }}
+                >
+                  打开
+                </Button>
+              </Box>
+              {webQr && (
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+                  <Box
+                    component="img"
+                    src={webQr}
+                    alt=""
+                    sx={{ width: 220, height: 220, p: 1, bgcolor: '#fff', borderRadius: '16px' }}
+                  />
+                </Box>
+              )}
+            </>
+          )}
+          {!webShown?.running && webShown?.error && (
+            <Typography sx={{ mt: 1, fontSize: 12.5, color: 'error.main' }}>
+              {webShown.error}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWebOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

@@ -23,7 +23,7 @@ internal sealed class GattClientLink : IDisposable
     public ulong Address => _address;
     public bool Ready => _rx != null && _tx != null && !_closed;
 
-    public event Action<string>? FrameReceived;
+    public event Action<byte[]>? FrameReceived;
     public event Action? Disconnected;
 
     public GattClientLink(ulong address)

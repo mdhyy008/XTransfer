@@ -46,10 +46,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlin.math.min
 
 const val BLE_CONVERSATION_PREFIX = "ble:"
+
+/** 蓝牙单文件上限。超过这个大小走局域网，蓝牙吞吐撑不住。 */
+const val BLE_FILE_LIMIT = 5L * 1024 * 1024
 
 // 心跳间隔；超过这个时长没收到对端任何帧就判定链路已断。
 private const val HEARTBEAT_INTERVAL_MS = 5_000L
@@ -57,6 +61,11 @@ private const val HEARTBEAT_TIMEOUT_SEC = 15L
 // 安卓设备之间由 id 小的一侧先连；大 id 一侧等这么久还没连上就兜底自己发起。
 private const val AUTO_CONNECT_FALLBACK_SEC = 8L
 private const val CONNECT_RETRY_SEC = 15L
+// 文件 offer 等对方接受、发完等对方落盘确认的时间。
+private const val FILE_ACCEPT_TIMEOUT_MS = 15_000L
+private const val FILE_FINISH_TIMEOUT_MS = 60_000L
+// 接收方超过这么久没收到新数据块就放弃这次传输。
+private const val FILE_STALL_TIMEOUT_MS = 30_000L
 
 data class BleDevice(
     val id: String,
@@ -76,7 +85,9 @@ data class BleState(
     val bluetoothOff: Boolean = false,
     val devices: List<BleDevice> = emptyList(),
     val connecting: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val version: String = "",
+    val address: String = ""
 )
 
 internal object BleProto {
@@ -86,13 +97,34 @@ internal object BleProto {
     val TX: UUID = UUID.fromString("0000f0e3-0000-1000-8000-00805f9b34fb")
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-    fun frame(json: String): ByteArray {
-        val payload = json.toByteArray(Charsets.UTF_8)
-        val out = ByteArray(2 + payload.size)
-        out[0] = ((payload.size shr 8) and 0xff).toByte()
-        out[1] = (payload.size and 0xff).toByte()
-        System.arraycopy(payload, 0, out, 2, payload.size)
+    // 帧体首字节区分类型：'{' 是 JSON 控制帧，0x01 是文件数据块。
+    // 这样老版本收到数据块只会解析失败丢弃，文字消息不受影响。
+    const val TYPE_DATA: Byte = 0x01
+
+    fun wrap(body: ByteArray): ByteArray {
+        val out = ByteArray(2 + body.size)
+        out[0] = ((body.size shr 8) and 0xff).toByte()
+        out[1] = (body.size and 0xff).toByte()
+        System.arraycopy(body, 0, out, 2, body.size)
         return out
+    }
+
+    fun frame(json: String): ByteArray = wrap(json.toByteArray(Charsets.UTF_8))
+
+    // 数据块帧体：类型 1B + id 长度 1B + id + 序号 4B + 数据。
+    fun dataFrame(id: String, seq: Int, data: ByteArray, offset: Int, count: Int): ByteArray {
+        val idBytes = id.toByteArray(Charsets.UTF_8)
+        val body = ByteArray(2 + idBytes.size + 4 + count)
+        body[0] = TYPE_DATA
+        body[1] = idBytes.size.toByte()
+        System.arraycopy(idBytes, 0, body, 2, idBytes.size)
+        val p = 2 + idBytes.size
+        body[p] = (seq shr 24).toByte()
+        body[p + 1] = (seq shr 16).toByte()
+        body[p + 2] = (seq shr 8).toByte()
+        body[p + 3] = seq.toByte()
+        System.arraycopy(data, offset, body, p + 4, count)
+        return wrap(body)
     }
 
     fun chunks(data: ByteArray, size: Int): List<ByteArray> {
@@ -111,9 +143,9 @@ internal object BleProto {
     class Assembler {
         private var buffer = ByteArray(0)
 
-        fun feed(chunk: ByteArray): List<String> {
+        fun feed(chunk: ByteArray): List<ByteArray> {
             buffer = buffer + chunk
-            val out = ArrayList<String>()
+            val out = ArrayList<ByteArray>()
             while (buffer.size >= 2) {
                 val length = ((buffer[0].toInt() and 0xff) shl 8) or (buffer[1].toInt() and 0xff)
                 if (length <= 0 || length > 8192) {
@@ -121,7 +153,7 @@ internal object BleProto {
                     break
                 }
                 if (buffer.size < 2 + length) break
-                out += String(buffer, 2, length, Charsets.UTF_8)
+                out += buffer.copyOfRange(2, 2 + length)
                 buffer = buffer.copyOfRange(2 + length, buffer.size)
             }
             return out
@@ -141,6 +173,39 @@ class BleManager(private val context: Context) {
 
     /** 收到一条完整的文字消息；由 Repository 落库。 */
     var onInbound: ((fromId: String, fromName: String, platform: String, body: String, ts: Long) -> Unit)? = null
+
+    /** 对端要发文件过来，返回是否接收；由 Repository 判断拉黑、空间等。 */
+    var onFileOffer: ((peerId: String, id: String, fromName: String, platform: String, name: String, size: Long, ts: Long) -> Boolean)? = null
+    /** 接收进度；id 是发送方给的文件 id。 */
+    var onFileProgress: ((id: String, received: Long, total: Long) -> Unit)? = null
+    /** 接收完成，bytes 是完整文件内容，由 Repository 写盘入库。 */
+    var onFileDone: ((id: String, name: String, bytes: ByteArray) -> Unit)? = null
+    /** 接收失败。 */
+    var onFileFailed: ((id: String, reason: String) -> Unit)? = null
+    /** 发送进度。 */
+    var onFileSendProgress: ((id: String, sent: Long, total: Long) -> Unit)? = null
+
+    private class IncomingFile(
+        val id: String,
+        val from: String,
+        val name: String,
+        val size: Long,
+        val buffer: ByteArrayOutputStream = ByteArrayOutputStream(),
+        var received: Long = 0,
+        var nextSeq: Int = 0,
+        var lastAt: Long = System.currentTimeMillis(),
+        var lastReport: Long = 0
+    )
+
+    private class OutgoingFile(
+        val id: String,
+        val to: String,
+        val accept: CompletableDeferred<Boolean> = CompletableDeferred(),
+        val done: CompletableDeferred<String> = CompletableDeferred()
+    )
+
+    private val incomingFiles = HashMap<String, IncomingFile>()
+    private val outgoingFiles = HashMap<String, OutgoingFile>()
 
     private val _state = MutableStateFlow(BleState())
     val state: StateFlow<BleState> = _state.asStateFlow()
@@ -244,6 +309,7 @@ class BleManager(private val context: Context) {
         val ad = adapter ?: return
         // 先挂上蓝牙开关监听：应用启动时蓝牙是关的，也要能在用户打开蓝牙后自动恢复。
         registerReceiver()
+        val (version, address) = radioMeta()
         if (!ad.isEnabled) {
             advertising = false
             _state.update {
@@ -252,7 +318,9 @@ class BleManager(private val context: Context) {
                     bluetoothOff = true,
                     scanning = false,
                     advertising = false,
-                    error = null
+                    error = null,
+                    version = version,
+                    address = address
                 )
             }
             return
@@ -269,7 +337,13 @@ class BleManager(private val context: Context) {
         if (!advertising) startAdvertising(ad)
         startScanning(ad)
         _state.update {
-            it.copy(on = true, bluetoothOff = false, error = null)
+            it.copy(
+                on = true,
+                bluetoothOff = false,
+                error = null,
+                version = version,
+                address = address
+            )
         }
     }
 
@@ -293,6 +367,8 @@ class BleManager(private val context: Context) {
             idToDevice.clear()
             introspecting.clear()
             ackSignals.clear()
+            incomingFiles.clear()
+            outgoingFiles.clear()
             seen.clear()
             lastRx.clear()
             lastConnectAttempt.clear()
@@ -358,7 +434,7 @@ class BleManager(private val context: Context) {
             synchronized(lock) { clients[peerId] }?.takeIf { it.ready }?.let { return@withLock it }
             synchronized(lock) { clients.remove(peerId) }?.close()
             val device = synchronized(lock) { idToDevice[peerId] } ?: return@withLock null
-            val link = ClientLink(device) { json -> handleFrame(json, null, peerId) }
+            val link = ClientLink(device) { body -> handleBody(body, null, peerId) }
             if (!link.connect()) {
                 link.close()
                 return@withLock null
@@ -381,10 +457,19 @@ class BleManager(private val context: Context) {
         links.forEach { it.close() }
     }
 
-    private fun handleFrame(json: String, fromDevice: BluetoothDevice?, peerId: String?): String? {
-        val message = runCatching { JSONObject(json) }.getOrNull() ?: return null
+    private fun handleBody(body: ByteArray, fromDevice: BluetoothDevice?, peerId: String?) {
+        if (body.isEmpty()) return
         val key = peerId ?: fromDevice?.address
         if (key != null) synchronized(lock) { lastRx[key] = nowSec() }
+        if (body[0] == BleProto.TYPE_DATA) {
+            handleFileChunk(body, fromDevice, peerId)
+            return
+        }
+        handleFrame(String(body, Charsets.UTF_8), fromDevice, peerId)
+    }
+
+    private fun handleFrame(json: String, fromDevice: BluetoothDevice?, peerId: String?): String? {
+        val message = runCatching { JSONObject(json) }.getOrNull() ?: return null
         when (message.optString("t")) {
             "h" -> {
                 val pong = BleProto.frame(
@@ -399,6 +484,46 @@ class BleManager(private val context: Context) {
                 if (id.isNotEmpty()) {
                     synchronized(lock) { ackSignals.remove(id) }?.complete(true)
                 }
+                return null
+            }
+            "fo" -> {
+                handleFileOffer(message, fromDevice, peerId)
+                return null
+            }
+            "fa" -> {
+                val id = message.optString("id")
+                synchronized(lock) { outgoingFiles[id] }?.accept?.complete(true)
+                return null
+            }
+            "fr" -> {
+                val id = message.optString("id")
+                val reason = message.optString("reason").ifEmpty { "对方未接收" }
+                synchronized(lock) { outgoingFiles[id] }?.let {
+                    it.accept.complete(false)
+                    it.done.complete(reason)
+                }
+                return null
+            }
+            "fe" -> {
+                handleFileFinish(message, fromDevice, peerId)
+                return null
+            }
+            "fk" -> {
+                val id = message.optString("id")
+                synchronized(lock) { outgoingFiles[id] }?.done?.complete("")
+                return null
+            }
+            "fx" -> {
+                val id = message.optString("id")
+                val reason = message.optString("reason").ifEmpty { "接收失败" }
+                synchronized(lock) { outgoingFiles[id] }?.done?.complete(reason)
+                return null
+            }
+            "fc" -> {
+                val id = message.optString("id")
+                synchronized(lock) { incomingFiles.remove(id) }
+                onFileFailed?.invoke(id, "对方已取消")
+                synchronized(lock) { outgoingFiles[id] }?.done?.complete("已取消")
                 return null
             }
             "m" -> Unit
@@ -418,6 +543,185 @@ class BleManager(private val context: Context) {
         registerFromFrame(from, name, platform, fromDevice?.address)
         onInbound?.invoke(from, name, platform, message.optString("body"), message.optLong("ts"))
         return from
+    }
+
+    // ---------- 文件 ----------
+
+    private fun handleFileOffer(message: JSONObject, fromDevice: BluetoothDevice?, peerId: String?) {
+        val id = message.optString("id")
+        val from = message.optString("from")
+        if (id.isEmpty() || from.isEmpty() || from == selfId) return
+        val name = message.optString("name")
+        val size = message.optLong("size")
+        val reason = when {
+            size <= 0 || size > BLE_FILE_LIMIT -> "文件过大"
+            name.isBlank() -> "文件名为空"
+            synchronized(lock) { incomingFiles.containsKey(id) } -> "重复文件"
+            else -> null
+        }
+        if (reason != null) {
+            replyFrame(
+                peerId, fromDevice,
+                BleProto.frame(JSONObject().put("t", "fr").put("id", id).put("reason", reason).toString())
+            )
+            return
+        }
+        val fromName = message.optString("fromName")
+        val platform = message.optString("platform", "android")
+        val accepted = onFileOffer?.invoke(from, id, fromName, platform, name, size, message.optLong("ts")) == true
+        if (!accepted) {
+            replyFrame(
+                peerId, fromDevice,
+                BleProto.frame(JSONObject().put("t", "fr").put("id", id).put("reason", "对方未接收").toString())
+            )
+            return
+        }
+        synchronized(lock) { incomingFiles[id] = IncomingFile(id, from, name, size) }
+        registerFromFrame(from, fromName, platform, fromDevice?.address)
+        replyFrame(
+            peerId, fromDevice,
+            BleProto.frame(JSONObject().put("t", "fa").put("id", id).toString())
+        )
+    }
+
+    private fun handleFileChunk(body: ByteArray, fromDevice: BluetoothDevice?, peerId: String?) {
+        if (body.size < 8) return
+        val idLen = body[1].toInt() and 0xff
+        if (idLen <= 0 || body.size < 2 + idLen + 4) return
+        val id = String(body, 2, idLen, Charsets.UTF_8)
+        val p = 2 + idLen
+        val seq = ((body[p].toInt() and 0xff) shl 24) or
+            ((body[p + 1].toInt() and 0xff) shl 16) or
+            ((body[p + 2].toInt() and 0xff) shl 8) or
+            (body[p + 3].toInt() and 0xff)
+        val file = synchronized(lock) { incomingFiles[id] } ?: return
+        if (seq != file.nextSeq) {
+            synchronized(lock) { incomingFiles.remove(id) }
+            onFileFailed?.invoke(id, "数据块顺序错误")
+            replyFrame(
+                peerId, fromDevice,
+                BleProto.frame(JSONObject().put("t", "fx").put("id", id).put("reason", "数据块顺序错误").toString())
+            )
+            return
+        }
+        val size = body.size - p - 4
+        file.buffer.write(body, p + 4, size)
+        file.received += size.toLong()
+        file.nextSeq = seq + 1
+        val nowMs = System.currentTimeMillis()
+        file.lastAt = nowMs
+        if (nowMs - file.lastReport >= 200) {
+            file.lastReport = nowMs
+            onFileProgress?.invoke(id, file.received, file.size)
+        }
+    }
+
+    private fun handleFileFinish(message: JSONObject, fromDevice: BluetoothDevice?, peerId: String?) {
+        val id = message.optString("id")
+        val file = synchronized(lock) { incomingFiles.remove(id) } ?: return
+        val bytes = file.buffer.toByteArray()
+        if (file.received != file.size || bytes.size.toLong() != file.size) {
+            onFileFailed?.invoke(id, "文件不完整")
+            replyFrame(
+                peerId, fromDevice,
+                BleProto.frame(JSONObject().put("t", "fx").put("id", id).put("reason", "文件不完整").toString())
+            )
+            return
+        }
+        onFileProgress?.invoke(id, file.size, file.size)
+        onFileDone?.invoke(id, file.name, bytes)
+        replyFrame(
+            peerId, fromDevice,
+            BleProto.frame(JSONObject().put("t", "fk").put("id", id).toString())
+        )
+    }
+
+    suspend fun sendFile(
+        peerId: String,
+        id: String,
+        name: String,
+        data: ByteArray,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ) {
+        if (data.isEmpty()) throw IllegalStateException("文件为空")
+        if (data.size.toLong() > BLE_FILE_LIMIT) throw IllegalStateException("文件超过 5 MB")
+        if (id.isEmpty()) throw IllegalStateException("文件 id 为空")
+        val outgoing = OutgoingFile(id, peerId)
+        synchronized(lock) { outgoingFiles[id] = outgoing }
+        try {
+            val offer = JSONObject()
+                .put("t", "fo")
+                .put("id", id)
+                .put("from", selfId)
+                .put("fromName", selfName)
+                .put("platform", "android")
+                .put("name", name)
+                .put("size", data.size.toLong())
+                .put("ts", nowSec())
+            if (!sendOnce(peerId, BleProto.frame(offer.toString()))) {
+                throw IllegalStateException("蓝牙未连接")
+            }
+            if (withTimeoutOrNull(FILE_ACCEPT_TIMEOUT_MS) { outgoing.accept.await() } != true) {
+                throw IllegalStateException("对方未接收")
+            }
+            val chunk = chunkFor(peerId, id.toByteArray(Charsets.UTF_8).size)
+            var offset = 0
+            var seq = 0
+            var reported = 0L
+            while (offset < data.size) {
+                val count = min(chunk, data.size - offset)
+                if (!sendOnce(peerId, BleProto.dataFrame(id, seq, data, offset, count))) {
+                    throw IllegalStateException("蓝牙连接已断开")
+                }
+                offset += count
+                seq += 1
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - reported >= 200) {
+                    reported = nowMs
+                    onProgress?.invoke(offset.toLong(), data.size.toLong())
+                    onFileSendProgress?.invoke(id, offset.toLong(), data.size.toLong())
+                }
+            }
+            onProgress?.invoke(data.size.toLong(), data.size.toLong())
+            onFileSendProgress?.invoke(id, data.size.toLong(), data.size.toLong())
+            val finish = BleProto.frame(JSONObject().put("t", "fe").put("id", id).toString())
+            if (!sendOnce(peerId, finish)) throw IllegalStateException("蓝牙连接已断开")
+            // done 用空串表示成功：withTimeoutOrNull 的 null 只能代表超时。
+            val reason = withTimeoutOrNull(FILE_FINISH_TIMEOUT_MS) { outgoing.done.await() }
+                ?: throw IllegalStateException("等待对方确认超时")
+            if (reason.isNotEmpty()) throw IllegalStateException(reason)
+        } finally {
+            synchronized(lock) { outgoingFiles.remove(id) }
+        }
+    }
+
+    fun cancelFile(id: String) {
+        val outgoing = synchronized(lock) { outgoingFiles[id] }
+        if (outgoing != null) {
+            scope.launch {
+                runCatching {
+                    sendOnce(
+                        outgoing.to,
+                        BleProto.frame(JSONObject().put("t", "fc").put("id", id).toString())
+                    )
+                }
+            }
+            outgoing.done.complete("已取消")
+        }
+        if (synchronized(lock) { incomingFiles.remove(id) } != null) {
+            onFileFailed?.invoke(id, "已取消")
+        }
+    }
+
+    private fun chunkFor(peerId: String, idLen: Int): Int {
+        val mtu = synchronized(lock) {
+            val address = idToAddress[peerId]
+            val serverMtuValue = address?.let { serverMtu[it] } ?: 0
+            val clientMtuValue = clients[peerId]?.mtuValue ?: 0
+            maxOf(serverMtuValue, clientMtuValue, 23)
+        }
+        // 一个数据帧 = 类型 1 + id 长度 1 + id + 序号 4 + 数据，正好占满一个 ATT 包。
+        return ((mtu - 3).coerceIn(20, 512) - 6 - idLen).coerceAtLeast(20)
     }
 
     private fun replyFrame(peerId: String?, fromDevice: BluetoothDevice?, frame: ByteArray) {
@@ -472,7 +776,29 @@ class BleManager(private val context: Context) {
                 device.copy(connected = serverConnected || clientConnected || device.connected)
             }.sortedByDescending { it.rssi }
         }
-        _state.update { it.copy(devices = devices) }
+        val (version, address) = radioMeta()
+        _state.update { it.copy(devices = devices, version = version, address = address) }
+    }
+
+    // 安卓没有公开蓝牙核心版本，只能按 LE 特性推断；MAC 在新系统上对普通应用隐藏。
+    @SuppressLint("MissingPermission")
+    private fun radioMeta(): Pair<String, String> {
+        val ad = adapter ?: return "" to ""
+        val version = runCatching {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ad.isLeAudioSupported == BluetoothStatusCodes.FEATURE_SUPPORTED -> "5.3+"
+                ad.isLeExtendedAdvertisingSupported -> "5.0+"
+                ad.isLe2MPhySupported -> "5.0+"
+                ad.isLeCodedPhySupported -> "5.0+"
+                else -> "4.x"
+            }
+        }.getOrDefault("")
+        val address = runCatching { ad.address.orEmpty().uppercase() }
+            .getOrDefault("")
+            .takeUnless { it.isBlank() || it == "02:00:00:00:00:00" }
+            .orEmpty()
+        return version to address
     }
 
     private fun markConnected(device: BluetoothDevice, connected: Boolean) {
@@ -693,6 +1019,17 @@ class BleManager(private val context: Context) {
                 markConnected(device, false)
             }
         }
+        // 对端断在半路时不会有任何帧进来，靠心跳节拍把卡住的接收收掉。
+        val nowMs = System.currentTimeMillis()
+        val stalled = synchronized(lock) {
+            incomingFiles.values
+                .filter { nowMs - it.lastAt > FILE_STALL_TIMEOUT_MS }
+                .map { it.id }
+        }
+        for (id in stalled) {
+            synchronized(lock) { incomingFiles.remove(id) }
+            onFileFailed?.invoke(id, "传输超时")
+        }
     }
 
     // ---------- GATT Server ----------
@@ -806,7 +1143,7 @@ class BleManager(private val context: Context) {
                 serverAssemblers.getOrPut(device.address) { BleProto.Assembler() }
             }
             for (frame in assembler.feed(value)) {
-                handleFrame(frame, device, null)
+                handleBody(frame, device, null)
             }
         }
 
@@ -886,10 +1223,10 @@ class BleManager(private val context: Context) {
                     synchronized(lock) { notifySignals.remove(device.address) }
                     break
                 }
-                val done = withTimeoutOrNull(1_200) { signal.await() } ?: true
+                // 回调本身就是链路层发完一包的节奏控制，再额外 sleep 只会白白拖慢传输。
+                val done = withTimeoutOrNull(1_500) { signal.await() } ?: true
                 sent = sent || done
                 if (!done) break
-                delay(4)
             }
             sent
         }
@@ -898,7 +1235,7 @@ class BleManager(private val context: Context) {
 
     private inner class ClientLink(
         private val device: BluetoothDevice,
-        private val onFrame: (String) -> Unit
+        private val onFrame: (ByteArray) -> Unit
     ) {
         private var gatt: BluetoothGatt? = null
         private var rx: BluetoothGattCharacteristic? = null
@@ -922,6 +1259,7 @@ class BleManager(private val context: Context) {
             private set
         var peerPlatform = "android"
             private set
+        val mtuValue: Int get() = mtu
 
         suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
             try {
@@ -935,6 +1273,16 @@ class BleManager(private val context: Context) {
                 mtuSignal = mtuWait
                 if (g.requestMtu(517)) {
                     withTimeoutOrNull(1_500) { mtuWait.await() }
+                }
+                // 2M PHY 把物理层速率翻倍，传文件时差别明显。
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    runCatching {
+                        g.setPreferredPhy(
+                            BluetoothDevice.PHY_LE_2M_MASK,
+                            BluetoothDevice.PHY_LE_2M_MASK,
+                            BluetoothDevice.PHY_OPTION_NO_PREFERRED
+                        )
+                    }
                 }
                 val servicesWait = CompletableDeferred<Boolean>()
                 servicesSignal = servicesWait

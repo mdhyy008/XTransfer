@@ -9,6 +9,7 @@ import cn.mdhyy.xtransfer.data.LocalHotspot
 import cn.mdhyy.xtransfer.data.Notifications
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.SettingsStore
+import cn.mdhyy.xtransfer.data.WebChatServer
 import cn.mdhyy.xtransfer.data.WifiDirectManager
 
 class XlanApp : Application() {
@@ -27,6 +28,9 @@ class XlanApp : Application() {
     lateinit var ble: BleManager
         private set
 
+    lateinit var webChat: WebChatServer
+        private set
+
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
@@ -37,6 +41,8 @@ class XlanApp : Application() {
         wifiDirect = WifiDirectManager(this)
         ble = BleManager(this)
         repo.attachBle(ble)
+        webChat = WebChatServer(this, repo)
+        webChat.startIfEnabled()
     }
 
     companion object {

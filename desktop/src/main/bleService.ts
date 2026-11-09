@@ -13,9 +13,24 @@ export type BleInbound = {
   ts: number
 }
 
+export type BleFileOffer = {
+  id: string
+  from: string
+  fromName: string
+  platform?: string
+  name: string
+  size: number
+  ts: number
+}
+
 type Callbacks = {
   onChange: (patch: Partial<BleState>) => void
   onMessage: (message: BleInbound) => void
+  // 返回保存目录表示接收；返回 reason 表示拒绝。
+  onFileOffer: (offer: BleFileOffer) => { dir?: string; reason?: string }
+  onFileProgress: (id: string, received: number, total: number, direction: 'in' | 'out') => void
+  onFileDone: (id: string, name: string, path: string, bytes: number) => void
+  onFileFailed: (id: string, reason: string) => void
 }
 
 type Pending = {
@@ -56,7 +71,9 @@ export class BleService {
       on: false,
       scanning: false,
       advertising: false,
-      devices: []
+      devices: [],
+      version: '',
+      address: ''
     }
   }
 
@@ -138,6 +155,33 @@ export class BleService {
       this.pending.set(id, { resolve, reject, timer })
       this.write({ cmd: 'send', to, id, body, ts: Math.floor(Date.now() / 1000) })
     })
+  }
+
+  sendFile(to: string, id: string, name: string, filePath: string): Promise<void> {
+    if (!this.state.on || !this.socket) {
+      return Promise.reject(new Error('蓝牙未连接'))
+    }
+    let size = 0
+    try {
+      size = fs.statSync(filePath).size
+    } catch {
+      return Promise.reject(new Error('文件不可用'))
+    }
+    // 蓝牙实测 20–60 KB/s，按 8 KB/s 兜底估超时，封顶 15 分钟。
+    const timeout = Math.min(15 * 60_000, 120_000 + Math.ceil(size / 8192) * 1000)
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error('蓝牙发送超时'))
+      }, timeout)
+      this.pending.set(id, { resolve, reject, timer })
+      this.write({ cmd: 'sendfile', to, id, name, path: filePath })
+    })
+  }
+
+  cancelFile(id: string): void {
+    if (!id) return
+    this.write({ cmd: 'filecancel', id })
   }
 
   private patch(next: Partial<BleState>): void {
@@ -275,9 +319,60 @@ export class BleService {
       case 'devices':
         this.patch({ devices: parseDevices(data.devices) })
         break
+      case 'radio':
+        this.patch({
+          version: typeof data.version === 'string' ? data.version : '',
+          address: typeof data.address === 'string' ? data.address : ''
+        })
+        break
       case 'message':
         this.handleMessage(data)
         break
+      case 'fileoffer':
+        this.handleFileOffer(data)
+        break
+      case 'fileprogress': {
+        const id = typeof data.id === 'string' ? data.id : ''
+        if (!id) break
+        const received = Number(data.received) || Number(data.sent) || 0
+        const total = Number(data.total) || 0
+        this.callbacks.onFileProgress(id, received, total, data.dir === 'out' ? 'out' : 'in')
+        break
+      }
+      case 'filedone': {
+        const id = typeof data.id === 'string' ? data.id : ''
+        if (!id) break
+        this.callbacks.onFileDone(
+          id,
+          typeof data.name === 'string' ? data.name : '',
+          typeof data.path === 'string' ? data.path : '',
+          Number(data.bytes) || 0
+        )
+        break
+      }
+      case 'filesent': {
+        const id = typeof data.id === 'string' ? data.id : ''
+        const item = this.pending.get(id)
+        if (item) {
+          clearTimeout(item.timer)
+          this.pending.delete(id)
+          item.resolve()
+        }
+        break
+      }
+      case 'filefailed': {
+        const id = typeof data.id === 'string' ? data.id : ''
+        const reason = typeof data.reason === 'string' ? data.reason : '蓝牙文件传输失败'
+        const item = this.pending.get(id)
+        if (item) {
+          clearTimeout(item.timer)
+          this.pending.delete(id)
+          item.reject(new Error(reason))
+        } else {
+          this.callbacks.onFileFailed(id, reason)
+        }
+        break
+      }
       case 'sent': {
         const id = typeof data.id === 'string' ? data.id : ''
         const item = this.pending.get(id)
@@ -300,6 +395,33 @@ export class BleService {
       }
       default:
         break
+    }
+  }
+
+  private handleFileOffer(data: Record<string, unknown>): void {
+    const id = typeof data.id === 'string' ? data.id : ''
+    const from = typeof data.from === 'string' ? data.from : ''
+    const name = typeof data.name === 'string' ? data.name : ''
+    if (!id || !from || !name) return
+    const offer: BleFileOffer = {
+      id,
+      from,
+      fromName: typeof data.fromName === 'string' && data.fromName ? data.fromName : from,
+      platform: typeof data.platform === 'string' ? data.platform : undefined,
+      name,
+      size: Number(data.size) || 0,
+      ts: typeof data.ts === 'number' ? data.ts : 0
+    }
+    let decision: { dir?: string; reason?: string }
+    try {
+      decision = this.callbacks.onFileOffer(offer)
+    } catch {
+      decision = { reason: '接收失败' }
+    }
+    if (decision.dir) {
+      this.write({ cmd: 'fileaccept', id, dir: decision.dir })
+    } else {
+      this.write({ cmd: 'filereject', id, reason: decision.reason || '对方未接收' })
     }
   }
 

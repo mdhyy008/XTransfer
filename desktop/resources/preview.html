@@ -97,6 +97,25 @@
     const panes = ['text','audioBox','videoEl','imageBox','none']
     const show = (id) => panes.forEach((p) => $(p).classList.toggle('on', p === id))
 
+    // desktop.ini 这类系统文件常是 GBK 或 UTF-16LE，按 UTF-8 强读会乱码。
+    function decodeText(buffer) {
+      if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+        return buffer.toString('utf16le', 2)
+      }
+      if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+        const swapped = Buffer.from(buffer)
+        swapped.swap16()
+        return swapped.toString('utf16le', 2)
+      }
+      const utf8 = buffer.toString('utf8').replace(/^﻿/, '')
+      if (!utf8.includes('�')) return utf8
+      try {
+        return new TextDecoder('gb18030').decode(buffer)
+      } catch {
+        return utf8
+      }
+    }
+
     function kindOf(ext) {
       if (TEXT.has(ext)) return 'text'
       if (AUDIO.has(ext)) return 'audio'
@@ -162,7 +181,7 @@
       if (kind === 'text') {
         let content = ''
         try {
-          content = fs.readFileSync(data.file, 'utf8')
+          content = decodeText(fs.readFileSync(data.file))
         } catch (error) {
           content = String(error && error.message ? error.message : error)
         }

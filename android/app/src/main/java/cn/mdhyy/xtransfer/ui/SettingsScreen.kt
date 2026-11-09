@@ -445,7 +445,7 @@ fun SettingsScreen(
                     SettingRow(
                         icon = Icons.Rounded.Bluetooth,
                         title = "蓝牙广播",
-                        singleRow = true,
+                        description = "蓝牙 ${bleState.version.ifBlank { "未知" }} · ${if (bleState.address.isBlank()) "MAC地址获取失败" else "MAC ${bleState.address}"}",
                         onClick = toggleBle,
                         trailing = {
                             SettingSwitch(

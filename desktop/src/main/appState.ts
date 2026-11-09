@@ -28,6 +28,7 @@ export class AppState {
     enterToSend: true,
     misans: true,
     bleEnabled: false,
+    webChat: false,
     blocked: [],
     aliases: {},
     muted: [],

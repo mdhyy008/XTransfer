@@ -61,9 +61,30 @@ const dayFmt = new Intl.DateTimeFormat('zh-CN', {
   day: '2-digit'
 })
 
+const dayKeyFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+})
+
+function dayKey(sec: number): string {
+  return dayKeyFmt.format(new Date(sec * 1000))
+}
+
 export function formatTime(sec: number, withDate = false): string {
   if (!sec) return ''
   return (withDate ? dateFmt : timeFmt).format(new Date(sec * 1000))
+}
+
+// 聊天里的时间整条消息：今天只给时分，昨天加「昨天」，更早带月日。
+export function formatChatTime(sec: number): string {
+  if (!sec) return ''
+  const now = Date.now() / 1000
+  const time = timeFmt.format(new Date(sec * 1000))
+  if (dayKey(sec) === dayKey(now)) return time
+  if (dayKey(sec) === dayKey(now - 86_400)) return `昨天 ${time}`
+  return dateFmt.format(new Date(sec * 1000))
 }
 
 export function formatWhen(sec: number): string {

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -28,15 +29,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,12 +57,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import cn.mdhyy.xtransfer.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
@@ -241,19 +250,7 @@ fun FileManagerScreen(
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Rounded.Inbox,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        modifier = Modifier.size(72.dp)
-                    )
-                    Text(
-                        text = "暂无文件",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                EmptyState(icon = Icons.Rounded.Inbox, text = "暂无文件")
             }
         } else {
             LazyColumn(
@@ -479,39 +476,82 @@ private fun FileManagerRow(
                 }
             }
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = onMenuDismiss) {
-            DropdownMenuItem(
-                text = { Text("打开") },
-                onClick = {
-                    onMenuDismiss()
-                    onOpen()
+        if (menuOpen) {
+            ModalBottomSheet(
+                onDismissRequest = onMenuDismiss,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(bottom = 8.dp)
+                ) {
+                    FileMenuRow(Icons.Rounded.OpenInNew, "打开") {
+                        onMenuDismiss()
+                        onOpen()
+                    }
+                    FileMenuDivider()
+                    FileMenuRow(Icons.Rounded.ContentCopy, "复制路径") {
+                        val clipboard =
+                            context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("path", file.absolutePath))
+                        context.toast("已复制路径")
+                        onMenuDismiss()
+                    }
+                    FileMenuDivider()
+                    FileMenuRow(Icons.Rounded.DriveFileRenameOutline, "重命名") {
+                        onMenuDismiss()
+                        onRename()
+                    }
+                    FileMenuDivider()
+                    FileMenuRow(Icons.Rounded.Delete, "删除", colors.error) {
+                        onMenuDismiss()
+                        onDelete()
+                    }
                 }
-            )
-            DropdownMenuItem(
-                text = { Text("复制路径") },
-                onClick = {
-                    val clipboard =
-                        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("path", file.absolutePath))
-                    context.toast("已复制路径")
-                    onMenuDismiss()
-                }
-            )
-            DropdownMenuItem(
-                text = { Text("重命名") },
-                onClick = onRename
-            )
-            DropdownMenuItem(
-                text = { Text("删除", color = colors.error) },
-                onClick = onDelete
-            )
+            }
         }
     }
 }
 
-private data class ApkMeta(val icon: ImageBitmap?, val version: String?)
+@Composable
+private fun FileMenuRow(
+    icon: ImageVector,
+    label: String,
+    tint: Color = Color.Unspecified,
+    onClick: () -> Unit
+) {
+    val custom = tint != Color.Unspecified
+    DropdownMenuItem(
+        contentPadding = PaddingValues(start = 24.dp, end = 16.dp),
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (custom) tint else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        text = {
+            Text(
+                text = label,
+                fontSize = 16.sp,
+                color = if (custom) tint else MaterialTheme.colorScheme.onSurface
+            )
+        },
+        onClick = onClick
+    )
+}
 
 @Composable
+private fun FileMenuDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    )
+}
+
+private data class ApkMeta(val icon: ImageBitmap?, val version: String?)@Composable
 private fun rememberApkMeta(path: String, mtime: Long): ApkMeta {
     val context = LocalContext.current
     var meta by remember(path, mtime) { mutableStateOf(ApkMeta(null, null)) }

@@ -87,11 +87,19 @@ export default function TitleBar({
             height: 24,
             px: 1,
             borderRadius: 999,
-            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.12),
-            color: 'primary.main',
+            bgcolor: (theme) =>
+              hotspotRunning
+                ? alpha(theme.palette.primary.main, 0.12)
+                : alpha(theme.palette.text.primary, 0.08),
+            color: hotspotRunning ? 'primary.main' : 'text.secondary',
             cursor: 'pointer',
             transition: (theme) => theme.transitions.create('background-color'),
-            '&:hover': { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.22) }
+            '&:hover': {
+              bgcolor: (theme) =>
+                hotspotRunning
+                  ? alpha(theme.palette.primary.main, 0.22)
+                  : alpha(theme.palette.text.primary, 0.16)
+            }
           }}
         >
           <WifiTetheringRounded sx={{ fontSize: 15 }} />

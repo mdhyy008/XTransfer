@@ -15,6 +15,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -317,18 +318,13 @@ fun AppRoot(
                             onRemove = { repo.removeBucket(it) }
                         )
                     } else {
-                        Box(
+                        EmptyState(
+                            icon = Icons.Rounded.Apps,
+                            text = "暂无小程序",
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "暂无小程序",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                                .background(MaterialTheme.colorScheme.background)
+                        )
                     }
                 }
                 NavigationBar(

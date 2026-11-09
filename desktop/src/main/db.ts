@@ -345,6 +345,99 @@ export class Db {
     return true
   }
 
+  addOutboundBluetoothFile(params: {
+    convId: string
+    peerName: string
+    id: string
+    sourcePath: string
+    fileName: string
+    size: number
+    selfId: string
+    selfName: string
+  }): void {
+    this.ensureConversation(params.convId, params.peerName || params.convId)
+    const ts = now()
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO messages (id, conversation_id, direction, kind, channel, from_id, from_name,
+           file_name, file_size, local_path, status, received, total, created_at, updated_at)
+         VALUES (?, ?, 'out', 'file', 'ble', ?, ?, ?, ?, ?, 'sending', 0, ?, ?, ?)`
+      )
+      .run(
+        params.id,
+        params.convId,
+        params.selfId,
+        params.selfName,
+        params.fileName,
+        params.size,
+        params.sourcePath,
+        params.size,
+        ts,
+        ts
+      )
+    this.touchConversation(params.convId, ts)
+  }
+
+  addInboundBluetoothFile(params: {
+    id: string
+    fromId: string
+    fromName: string
+    platform?: string
+    name: string
+    size: number
+    ts: number
+  }): boolean {
+    if (!params.id || !params.fromId) return false
+    const convId = `${BLE_PREFIX}${params.fromId}`
+    this.ensureConversation(convId, params.fromName || params.fromId, params.platform)
+    const nowSec = now()
+    const ts = params.ts > 0 ? Math.min(Math.floor(params.ts), nowSec) : nowSec
+    const res = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO messages (id, conversation_id, direction, kind, channel, from_id, from_name,
+           file_name, file_size, status, received, total, created_at, updated_at)
+         VALUES (?, ?, 'in', 'file', 'ble', ?, ?, ?, ?, 'sending', 0, ?, ?, ?)`
+      )
+      .run(
+        params.id,
+        convId,
+        params.fromId,
+        params.fromName || null,
+        params.name,
+        params.size,
+        params.size,
+        ts,
+        nowSec
+      )
+    if (res.changes === 0) return false
+    this.touchConversation(convId, ts)
+    return true
+  }
+
+  finishBluetoothFile(params: {
+    id: string
+    path?: string
+    name?: string
+    size?: number
+  }): void {
+    this.db
+      .prepare(
+        `UPDATE messages SET status = 'done', local_path = COALESCE(?, local_path),
+           file_name = COALESCE(?, file_name), file_size = COALESCE(?, file_size),
+           received = COALESCE(?, total), total = COALESCE(?, total), updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        params.path ?? null,
+        params.name ?? null,
+        params.size ?? null,
+        params.size ?? null,
+        params.size ?? null,
+        now(),
+        params.id
+      )
+  }
+
   addOutboundFile(params: {
     convId: string
     peerName: string
@@ -460,6 +553,25 @@ export class Db {
     return this.db
       .prepare('SELECT * FROM messages ORDER BY created_at ASC, rowid ASC')
       .all() as Message[]
+  }
+
+  listPublicTexts(
+    limit = 300
+  ): { id: string; from_id: string; from_name: string | null; body: string; created_at: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, from_id, from_name, body, created_at FROM messages
+           WHERE conversation_id = ? AND kind = 'text' AND status <> 'failed'
+           ORDER BY created_at DESC, rowid DESC LIMIT ?`
+      )
+      .all(PUBLIC_CONVERSATION_ID, limit) as {
+      id: string
+      from_id: string
+      from_name: string | null
+      body: string
+      created_at: number
+    }[]
+    return rows.reverse()
   }
 
   listActiveInbound(): Message[] {

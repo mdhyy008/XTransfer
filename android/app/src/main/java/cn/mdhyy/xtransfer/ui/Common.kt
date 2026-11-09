@@ -96,6 +96,20 @@ fun formatWhen(sec: Long): String {
     return SimpleDateFormat(pattern, Locale.CHINA).apply { timeZone = shanghai }.format(Date(sec * 1000))
 }
 
+// 聊天里的时间整条消息：今天只给时分，昨天加「昨天」，更早带月日。
+fun formatChatTime(sec: Long): String {
+    if (sec <= 0) return ""
+    fun pattern(text: String) = SimpleDateFormat(text, Locale.CHINA).apply { timeZone = shanghai }
+    fun dayKey(ms: Long): String = pattern("yyyyMMdd").format(Date(ms))
+    val now = System.currentTimeMillis()
+    val time = pattern("HH:mm").format(Date(sec * 1000))
+    return when (dayKey(sec * 1000)) {
+        dayKey(now) -> time
+        dayKey(now - 86_400_000L) -> "昨天 $time"
+        else -> pattern("MM-dd HH:mm").format(Date(sec * 1000))
+    }
+}
+
 fun previewOf(message: MessageEntity?): String {
     if (message == null) return ""
     val prefix = if (message.direction == "out") "我：" else ""

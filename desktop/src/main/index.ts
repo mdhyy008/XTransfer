@@ -47,6 +47,7 @@ import { FileSender } from './fileSender'
 import { hotspotStart, hotspotStatus, hotspotStop } from './hotspot'
 import { openEventStream, request, type Endpoint } from './localApi'
 import { SettingsStore } from './settings'
+import { WebChatService } from './webChat'
 import { XlanService } from './xlanService'
 
 const APP_DIR = app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd()
@@ -88,6 +89,10 @@ if (app.isPackaged && XLAN_DIR !== path.join(APP_DIR, 'xlan')) {
 const RECV_DIR = path.join(app.getPath('downloads'), 'X互传')
 
 const VIRTUAL_IFACE = /(vmware|virtualbox|vethernet|hyper-v|loopback|bluetooth|tailscale|zerotier|wsl|docker|vpn|tap-|tun)/i
+
+const SPEEDTEST_CHUNK = 4 * 1024 * 1024
+const SPEEDTEST_SIZE = SPEEDTEST_CHUNK * 2
+const SPEEDTEST_PREFIX = 'xlan-speedtest-'
 
 function maskToPrefix(mask: string | undefined): number {
   if (!mask) return 0
@@ -815,6 +820,9 @@ const sender = new FileSender(service.exe, XLAN_DIR, db, (messageIds) => {
 })
 
 const BLE_PREFIX = 'ble:'
+const BLE_FILE_LIMIT = 5 * 1024 * 1024
+const BLE_IMAGE_COMPRESS_LIMIT = 2 * 1024 * 1024
+const BLE_OUT_DIR = path.join(TMP_DIR, 'ble-out')
 const ble = new BleService(path.join(BLE_DIR, 'BleBridge.exe'), {
   onChange: (patch) => state.setBle(patch),
   onMessage: (message) => {
@@ -842,7 +850,190 @@ const ble = new BleService(path.join(BLE_DIR, 'BleBridge.exe'), {
       status: 'done',
       created_at: message.ts
     })
+  },
+  onFileOffer: (offer) => {
+    const blocked = settings.value.blocked ?? []
+    if (blocked.includes(offer.from) || blocked.includes(`${BLE_PREFIX}${offer.from}`)) {
+      return { reason: '对方未接收' }
+    }
+    if (!offer.size || offer.size > BLE_FILE_LIMIT) return { reason: '文件过大' }
+    const dir = settings.recvDir || RECV_DIR
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+    } catch {
+      return { reason: '无法保存' }
+    }
+    const inserted = db.addInboundBluetoothFile({
+      id: offer.id,
+      fromId: offer.from,
+      fromName: offer.fromName,
+      platform: offer.platform,
+      name: offer.name,
+      size: offer.size,
+      ts: offer.ts
+    })
+    if (inserted) state.emit()
+    return { dir }
+  },
+  onFileProgress: (id, received, total, direction) => {
+    const at = Date.now()
+    const prev = progressSamples.get(id)
+    const elapsed = prev ? Math.max(0.05, (at - prev.at) / 1000) : 0
+    const speed = prev ? Math.max(0, (received - prev.received) / elapsed) : 0
+    progressSamples.set(id, { received, at })
+    if (direction === 'in') inboundSeen.set(id, at)
+    db.setProgress(id, received, total, speed)
+    queueMessageUpdate([id])
+  },
+  onFileDone: (id, name, filePath, bytes) => {
+    db.finishBluetoothFile({
+      id,
+      path: filePath || undefined,
+      name: name || undefined,
+      size: bytes || undefined
+    })
+    const message = db.getMessage(id)
+    state.emit()
+    queueMessageUpdate([id])
+    if (!message) return
+    notifyItem({
+      id,
+      kind: 'file',
+      from_id: message.from_id,
+      from_name: message.from_name,
+      to_id: state.info?.id ?? '',
+      channel: 'ble',
+      name: message.file_name,
+      size: message.file_size,
+      path: message.local_path,
+      status: 'done',
+      created_at: message.created_at
+    })
+  },
+  onFileFailed: (id, reason) => {
+    const message = db.getMessage(id)
+    if (!message) return
+    if (message.status === 'canceled' || message.status === 'rejected') return
+    db.setMessageStatus(id, 'failed', reason)
+    state.emit()
+    queueMessageUpdate([id])
   }
+})
+
+function isBleImage(name: string): boolean {
+  return /\.(jpe?g|png|webp|bmp|heic|heif)$/i.test(name)
+}
+
+// 蓝牙带宽只有几十 KB/s：图片先压一遍，超限的文件直接拒绝。
+function prepareBleFile(sourcePath: string): {
+  path: string
+  name: string
+  size: number
+  temp: boolean
+} {
+  const stat = fs.statSync(sourcePath)
+  if (!stat.isFile()) throw new Error('蓝牙不支持发送文件夹')
+  const original = path.basename(sourcePath)
+  if (!isBleImage(original)) {
+    if (stat.size > BLE_FILE_LIMIT) throw new Error('单个文件不能超过 5 MB')
+    return { path: sourcePath, name: original, size: stat.size, temp: false }
+  }
+  // 2 MB 以内的图片原样发送，只有大图才值得压一轮。
+  if (stat.size <= BLE_IMAGE_COMPRESS_LIMIT) {
+    return { path: sourcePath, name: original, size: stat.size, temp: false }
+  }
+  const source = fs.readFileSync(sourcePath)
+  try {
+    const image = nativeImage.createFromPath(sourcePath)
+    if (!image.isEmpty()) {
+      const { width, height } = image.getSize()
+      const scale = Math.min(1, 1600 / Math.max(width, height))
+      const target =
+        scale < 1
+          ? image.resize({
+              width: Math.max(1, Math.round(width * scale)),
+              height: Math.max(1, Math.round(height * scale)),
+              quality: 'good'
+            })
+          : image
+      const jpeg = target.toJPEG(80)
+      if (jpeg.length > 0 && jpeg.length < source.length) {
+        fs.mkdirSync(BLE_OUT_DIR, { recursive: true })
+        const out = path.join(BLE_OUT_DIR, `${randomUUID()}.jpg`)
+        fs.writeFileSync(out, jpeg)
+        const name = `${original.replace(/\.[^.]+$/, '')}.jpg`
+        return { path: out, name, size: jpeg.length, temp: true }
+      }
+    }
+  } catch {
+    // 压不动就按原图发。
+  }
+  if (source.length > BLE_FILE_LIMIT) throw new Error('单个文件不能超过 5 MB')
+  return { path: sourcePath, name: original, size: source.length, temp: false }
+}
+
+async function sendBleFiles(to: string, paths: string[]): Promise<string> {
+  const peerId = to.slice(BLE_PREFIX.length)
+  const device = state.bluetooth.devices.find((item) => item.id === peerId)
+  const peerName = device?.name || peerId
+  if (!ble.snapshot.on) throw new Error('蓝牙未开启')
+  const first = paths.length > 0 ? randomUUID() : ''
+  let count = 0
+  for (const sourcePath of paths) {
+    if (!sourcePath) continue
+    const id = count === 0 ? first : randomUUID()
+    const prepared = prepareBleFile(sourcePath)
+    db.addOutboundBluetoothFile({
+      convId: to,
+      peerName,
+      id,
+      sourcePath,
+      fileName: prepared.name,
+      size: prepared.size,
+      selfId: state.info?.id ?? '',
+      selfName: state.info?.name ?? ''
+    })
+    state.emit()
+    try {
+      await ble.sendFile(peerId, id, prepared.name, prepared.path)
+      db.finishBluetoothFile({ id, name: prepared.name, size: prepared.size })
+      queueMessageUpdate([id])
+    } catch (error) {
+      db.setMessageStatus(id, 'failed', error instanceof Error ? error.message : '发送失败')
+      queueMessageUpdate([id])
+      throw error
+    } finally {
+      if (prepared.temp) fs.unlink(prepared.path, () => {})
+    }
+    count += 1
+  }
+  if (count === 0) throw new Error('没有可发送的项目')
+  return first
+}
+
+async function retryBleFile(to: string, id: string): Promise<void> {
+  const message = db.getMessage(id)
+  if (!message || message.direction !== 'out' || message.kind !== 'file') return
+  const sourcePath = message.local_path ?? ''
+  if (!sourcePath || !fs.existsSync(sourcePath)) throw new Error('文件已不存在')
+  const peerId = to.slice(BLE_PREFIX.length)
+  const prepared = prepareBleFile(sourcePath)
+  db.setMessageStatus(id, 'sending')
+  state.emit()
+  try {
+    await ble.sendFile(peerId, id, prepared.name, prepared.path)
+    db.finishBluetoothFile({ id, name: prepared.name, size: prepared.size })
+    queueMessageUpdate([id])
+  } finally {
+    if (prepared.temp) fs.unlink(prepared.path, () => {})
+  }
+}
+
+const webChat = new WebChatService({
+  db,
+  selfId: () => state.info?.id ?? '',
+  host: () => shareHost(),
+  onChange: () => state.emit()
 })
 
 let win: BrowserWindow | null = null
@@ -982,36 +1173,118 @@ function apiDelete<T = unknown>(pathname: string): Promise<T> {
   return request<T>(endpoint, 'DELETE', pathname)
 }
 
-// 只给测速用：直接连对端，不校验指纹，只要把响应读干净并数出字节数。
-// 对端没开加密时 https 握手会失败，退回明文再试一次。
-function peerGetBytes(host: string, port: number, pathname: string): Promise<number> {
-  const attempt = async (secure: boolean): Promise<number> => {
-    const lib = secure ? https : http
-    return new Promise<number>((resolve, reject) => {
-      const req = lib.request(
-        {
-          hostname: host,
-          port,
-          path: pathname,
-          method: 'GET',
-          rejectUnauthorized: false,
-          timeout: 5000
-        },
-        (res) => {
-          let bytes = 0
-          res.on('data', (chunk: Buffer) => {
-            bytes += chunk.length
-          })
-          res.on('end', () => resolve(bytes))
-          res.on('error', reject)
-        }
-      )
-      req.on('timeout', () => req.destroy(new Error('请求超时')))
-      req.on('error', reject)
-      req.end()
+// 测速直接连对端，不校验指纹：局域网直连只关心吞吐，加密本身仍然保留。
+// 对端没开加密时 https 握手会失败，先探测一次再决定用哪种协议。
+type PeerProto = 'https' | 'http'
+
+function peerRequest(
+  proto: PeerProto,
+  host: string,
+  port: number,
+  method: string,
+  pathname: string,
+  body?: Buffer,
+  headers: Record<string, string | number> = {},
+  onSent?: (bytes: number) => void
+): Promise<{ status: number; data: Buffer }> {
+  const lib = proto === 'https' ? https : http
+  return new Promise((resolve, reject) => {
+    const req = lib.request(
+      {
+        hostname: host,
+        port,
+        path: pathname,
+        method,
+        rejectUnauthorized: false,
+        timeout: 30_000,
+        headers: { ...headers, ...(body ? { 'content-length': body.length } : {}) }
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('end', () =>
+          resolve({ status: res.statusCode ?? 0, data: Buffer.concat(chunks) })
+        )
+        res.on('error', reject)
+      }
+    )
+    let dead = false
+    req.on('timeout', () => {
+      dead = true
+      req.destroy(new Error('请求超时'))
     })
+    req.on('error', (error) => {
+      dead = true
+      reject(error)
+    })
+    if (!body) {
+      req.end()
+      return
+    }
+    // 小片写入：配合背压让回调里的字节数贴近真实已发出的字节数，测速样本才平滑。
+    const step = 64 * 1024
+    let off = 0
+    const pump = (): void => {
+      while (off < body.length && !dead) {
+        const n = Math.min(step, body.length - off)
+        try {
+          req.write(body.subarray(off, off + n))
+        } catch {
+          return
+        }
+        off += n
+        onSent?.(n)
+        if (req.writableNeedDrain) {
+          req.once('drain', pump)
+          return
+        }
+      }
+      if (!dead) req.end()
+    }
+    pump()
+  })
+}
+
+async function detectPeerProto(host: string, port: number): Promise<PeerProto> {
+  try {
+    await peerRequest('https', host, port, 'GET', '/v1/info')
+    return 'https'
+  } catch {
+    return 'http'
   }
-  return attempt(true).catch(() => attempt(false))
+}
+
+async function peerJson(
+  proto: PeerProto,
+  host: string,
+  port: number,
+  method: string,
+  pathname: string,
+  payload?: unknown
+): Promise<Record<string, unknown>> {
+  const body = payload === undefined ? undefined : Buffer.from(JSON.stringify(payload))
+  const res = await peerRequest(
+    proto,
+    host,
+    port,
+    method,
+    pathname,
+    body,
+    body ? { 'content-type': 'application/json' } : {}
+  )
+  let data: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(res.data.toString('utf8')) as unknown
+    if (parsed && typeof parsed === 'object') data = parsed as Record<string, unknown>
+  } catch {
+    // 非 JSON 响应按 HTTP 状态处理
+  }
+  if (res.status < 200 || res.status >= 300) {
+    const code = typeof data.code === 'string' ? data.code : ''
+    const msg = typeof data.msg === 'string' ? data.msg : ''
+    throw new Error(code ? `${code}: ${msg}` : `HTTP ${res.status}`)
+  }
+  return data
 }
 
 type NoticeMessage = { title: string; body: string; convId: string; offerId?: string }
@@ -2002,6 +2275,25 @@ function rejectBlocked(item: Item): void {
   )
 }
 
+// 对端测速时落下的临时文件：不进消息列表、不通知，传完立刻删掉。
+function isSpeedtestItem(name: string | undefined): boolean {
+  return typeof name === 'string' && name.startsWith(SPEEDTEST_PREFIX)
+}
+
+function isSpeedtestTerminal(status: string | undefined): boolean {
+  return (
+    status === 'done' ||
+    status === 'failed' ||
+    status === 'canceled' ||
+    status === 'rejected' ||
+    status === 'expired'
+  )
+}
+
+function dropSpeedtestItem(id: string): void {
+  void apiDelete(`/v1/item/${encodeURIComponent(id)}?files=1`).catch(() => {})
+}
+
 // 分页把服务端记录全部补回来，启动时不会只停在最近 500 条。
 const INBOX_PAGE = 500
 const INBOX_MAX_PAGES = 20
@@ -2015,9 +2307,12 @@ async function refreshInbox(since = lastItemTs > 0 ? lastItemTs - 5 : 0): Promis
     }`
     const res = await apiGet<{ ok: boolean; items: Item[] }>(query)
     const all = res.items ?? []
-    const items = all.filter((item) => !isBlockedIncoming(item))
+    const items = all.filter((item) => !isBlockedIncoming(item) && !isSpeedtestItem(item.name))
     for (const item of all) {
       if (isBlockedIncoming(item)) rejectBlocked(item)
+      else if (isSpeedtestItem(item.name)) {
+        if (isSpeedtestTerminal(item.status)) dropSpeedtestItem(item.id)
+      }
     }
     if (items.length > 0) {
       db.ingestItems(items, state.info?.id ?? '')
@@ -2044,6 +2339,10 @@ function handleEvent(event: unknown): void {
         rejectBlocked(item)
         return
       }
+      if (isSpeedtestItem(item.name)) {
+        if (isSpeedtestTerminal(item.status)) dropSpeedtestItem(item.id)
+        return
+      }
       db.ingestItem(item, state.info?.id ?? '')
       lastItemTs = Math.max(lastItemTs, item.created_at || 0)
       state.emit()
@@ -2060,6 +2359,10 @@ function handleEvent(event: unknown): void {
         size?: number
       }
       if (!data?.id) return
+      if (isSpeedtestItem(data.name)) {
+        if (isSpeedtestTerminal(data.status)) dropSpeedtestItem(data.id)
+        return
+      }
       const old = db.getMessage(data.id)
       db.applyItemUpdate(data)
       if (data.status === 'active') {
@@ -2854,11 +3157,13 @@ function registerIpc(): void {
   ipcMain.handle('files:send', (_event, req: SendFilesReq) => {
     const to = req?.to ?? ''
     if (!to) throw new Error('请选择设备')
+    const paths = (req.paths ?? []).filter(Boolean)
+    if (to.startsWith(BLE_PREFIX)) return sendBleFiles(to, paths)
     const peer = state.peers.get(to)
     const jobId = sender.send(
       to,
       peer?.name ?? to,
-      (req.paths ?? []).filter(Boolean),
+      paths,
       state.info?.id ?? '',
       state.info?.name ?? ''
     )
@@ -2894,11 +3199,29 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('files:cancel', (_event, messageId: string) => {
-    if (messageId) sender.cancelByMessage(messageId)
+    if (!messageId) return
+    const message = db.getMessage(messageId)
+    if (message?.channel === 'ble') {
+      db.setMessageStatus(messageId, 'canceled')
+      queueMessageUpdate([messageId])
+      ble.cancelFile(messageId)
+      return
+    }
+    sender.cancelByMessage(messageId)
   })
 
-  ipcMain.handle('files:retry', (_event, req: RetryFileReq) => {
+  ipcMain.handle('files:retry', async (_event, req: RetryFileReq) => {
     if (!req?.to || !req.id) return
+    if (req.to.startsWith(BLE_PREFIX)) {
+      try {
+        await retryBleFile(req.to, req.id)
+      } catch (error) {
+        db.setMessageStatus(req.id, 'failed', error instanceof Error ? error.message : '发送失败')
+        queueMessageUpdate([req.id])
+        throw error
+      }
+      return
+    }
     sender.retry(req.to, req.id)
   })
 
@@ -2941,6 +3264,17 @@ function registerIpc(): void {
     settings.update({ bleEnabled: false })
     state.setSettings(settings.value)
     return ble.stop()
+  })
+  ipcMain.handle('webchat:status', () => webChat.status())
+  ipcMain.handle('webchat:start', async () => {
+    settings.update({ webChat: true })
+    state.setSettings(settings.value)
+    return webChat.start()
+  })
+  ipcMain.handle('webchat:stop', async () => {
+    settings.update({ webChat: false })
+    state.setSettings(settings.value)
+    return webChat.stop()
   })
   ipcMain.handle('ble:connect', async (_event, id: string) => {
     if (typeof id !== 'string' || !id) return
@@ -3017,47 +3351,102 @@ function registerIpc(): void {
     await refreshPeers()
   })
 
-  // 5 秒测速：向对端反复拉取公共频道历史（只读接口），每秒取一次样本，5 个样本的平均值作为结果。
+  // 真实文件传输测速：向对端发一个 8MiB 的临时文件，5 秒内多线程反复写前半段保持传输活跃，
+  // 最后补上后半段让对端完成落盘；对端识别到测速文件名后不入库、直接删除。
   ipcMain.handle('speed:test', async (event, peerId: string) => {
     const peer = state.peers.get(peerId)
     if (!peer?.addr || !peer.port) throw new Error('设备不在线')
     const host = peer.addr
     const port = peer.port
-    const deadline = Date.now() + 5000
-    let total = 0
-    let peak = 0
-    const worker = async (): Promise<void> => {
-      while (Date.now() < deadline) {
-        const started = Date.now()
-        const bytes = await peerGetBytes(host, port, '/v1/public/history?limit=5000').catch(
-          () => -1
-        )
-        if (bytes < 0) {
-          await new Promise((resolve) => setTimeout(resolve, 100))
-          continue
+    const proto = await detectPeerProto(host, port)
+    const offer = await peerJson(proto, host, port, 'POST', '/v1/offer', {
+      from_id: state.info?.id ?? '',
+      from_name: state.info?.name ?? '',
+      to_id: peerId,
+      kind: 'file',
+      name: `xlan-speedtest-${Date.now()}.bin`,
+      size: SPEEDTEST_SIZE
+    })
+    const offerId = typeof offer.id === 'string' ? offer.id : ''
+    if (!offerId) throw new Error('对端没有返回传输编号')
+    let accepted = offer.accepted === true || offer.duplicate === true
+    if (!accepted) {
+      const waitUntil = Date.now() + 6000
+      while (Date.now() < waitUntil) {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        const st = await peerJson(
+          proto,
+          host,
+          port,
+          'GET',
+          `/v1/offer/${encodeURIComponent(offerId)}`
+        ).catch(() => ({} as Record<string, unknown>))
+        const status = typeof st.status === 'string' ? st.status : ''
+        if (status === 'active' || status === 'done') {
+          accepted = true
+          break
         }
-        const elapsed = Math.max(0.05, (Date.now() - started) / 1000)
-        total += bytes
-        peak = Math.max(peak, bytes / elapsed)
+        if (status === 'failed' || status === 'expired') break
+      }
+    }
+    if (!accepted) throw new Error('对方未接受测速文件（需对方信任本机）')
+
+    const dataUrl = `/v1/offer/${encodeURIComponent(offerId)}/data`
+    const block = Buffer.alloc(SPEEDTEST_CHUNK)
+    let measured = 0
+    let failure: Error | null = null
+    const put = async (start: number, end: number): Promise<void> => {
+      const res = await peerRequest(
+        proto,
+        host,
+        port,
+        'PUT',
+        dataUrl,
+        block,
+        {
+          'content-type': 'application/octet-stream',
+          'content-range': `bytes ${start}-${end}/${SPEEDTEST_SIZE}`
+        },
+        (n) => {
+          measured += n
+        }
+      )
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(`上传失败：HTTP ${res.status}`)
+      }
+    }
+    const deadline = Date.now() + 5000
+    const worker = async (): Promise<void> => {
+      while (!failure && Date.now() < deadline) {
+        try {
+          await put(0, SPEEDTEST_CHUNK - 1)
+        } catch (error) {
+          failure = error instanceof Error ? error : new Error(String(error))
+        }
       }
     }
     const workers = [worker(), worker(), worker(), worker()]
     const samples: number[] = []
     let lastBytes = 0
+    let peak = 0
     for (let index = 0; index < 5; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000))
-      const sample = Math.round(total - lastBytes)
-      lastBytes = total
+      const sample = Math.max(0, measured - lastBytes)
+      lastBytes = measured
       samples.push(sample)
+      peak = Math.max(peak, sample)
       if (!event.sender.isDestroyed()) {
         event.sender.send('speed:progress', { id: peerId, sample, index: index + 1 })
       }
     }
     await Promise.all(workers)
+    if (failure) throw failure
+    const bytes = measured
+    await put(SPEEDTEST_CHUNK, SPEEDTEST_SIZE - 1)
     const avg = samples.length
       ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length)
       : 0
-    return { peak: Math.round(peak), avg, bytes: total, seconds: 5, samples }
+    return { peak: Math.round(peak), avg, bytes, seconds: 5, samples }
   })
 
   // 内网分发：把暂存桶里的文件通过局域网 HTTP 服务出去，扫码即可下载。
@@ -3176,6 +3565,7 @@ if (!locked) {
     screen.on('display-removed', positionDropPad)
     startLanWatch()
     createTray()
+    if (settings.value.webChat) void webChat.start().catch(() => {})
     await bootstrap()
   })
 
@@ -3194,6 +3584,7 @@ if (!locked) {
     eventReq = null
     sender.dispose()
     ble.dispose()
+    void webChat.stop()
     if (!hotspotOwned || hotspotClosing) return
     // 关热点要等 WinRT 返回，先拦下这次退出，最多等 8 秒。
     hotspotClosing = true

@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
         XlanApp.foreground = true
         (application as XlanApp).wifiDirect.startIfEnabled()
         (application as XlanApp).ble.startIfEnabled()
+        (application as XlanApp).webChat.startIfEnabled()
         FilesWidgetProvider.refresh(this)
         DevicesWidgetProvider.refresh(this)
     }

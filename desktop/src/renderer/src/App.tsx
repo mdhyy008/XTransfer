@@ -13,6 +13,7 @@ import {
   Typography,
   useMediaQuery
 } from '@mui/material'
+import AppsRounded from '@mui/icons-material/AppsRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import type {
   Conversation,
@@ -421,6 +422,12 @@ function Shell() {
     if (paths.length === 0) return
     try {
       const entries = await window.xt.inspectPaths(paths)
+      if (conv && conv.id.startsWith('ble:')) {
+        const files = entries.filter((entry) => entry.kind === 'file')
+        if (files.length < entries.length) notify('蓝牙不支持发送文件夹', 'warning')
+        if (files.length > 0) await sendEntries(files, false)
+        return
+      }
       addEntries(entries)
       if (entries.length > 0) {
         const files = entries.filter((entry) => entry.kind === 'file').length
@@ -806,7 +813,28 @@ function Shell() {
             notify={notify}
           />
         ) : (
-          <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 1.5
+            }}
+          >
+            <Box
+              sx={{
+                width: 104,
+                height: 104,
+                borderRadius: '50%',
+                bgcolor: 'action.hover',
+                display: 'grid',
+                placeItems: 'center'
+              }}
+            >
+              <AppsRounded sx={{ fontSize: 44, color: 'text.disabled' }} />
+            </Box>
             <Typography sx={{ color: 'text.secondary', fontSize: 13 }}>暂无小程序</Typography>
           </Box>
         )}

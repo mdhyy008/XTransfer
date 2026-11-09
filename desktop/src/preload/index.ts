@@ -15,6 +15,7 @@ import type {
   Snapshot,
   SpeedTestProgress,
   SpeedTestResult,
+  WebChatStatus,
   XtApi
 } from '../shared/types'
 
@@ -142,6 +143,9 @@ const api: XtApi = {
   bleStart: () => ipcRenderer.invoke('ble:start') as Promise<BleState>,
   bleStop: () => ipcRenderer.invoke('ble:stop') as Promise<BleState>,
   bleConnect: (peerId: string) => ipcRenderer.invoke('ble:connect', peerId) as Promise<void>,
+  webChatStatus: () => ipcRenderer.invoke('webchat:status') as Promise<WebChatStatus>,
+  webChatStart: () => ipcRenderer.invoke('webchat:start') as Promise<WebChatStatus>,
+  webChatStop: () => ipcRenderer.invoke('webchat:stop') as Promise<WebChatStatus>,
   syncPublic: () => ipcRenderer.invoke('public:sync') as Promise<void>,
   minimize: () => ipcRenderer.send('win:minimize'),
   toggleMaximize: () => ipcRenderer.send('win:toggleMaximize'),

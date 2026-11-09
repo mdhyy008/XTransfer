@@ -231,20 +231,7 @@ fun ShareScreen(
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Rounded.DeviceHub,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        modifier = Modifier.size(72.dp)
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        text = "暂存桶为空",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                EmptyState(icon = Icons.Rounded.DeviceHub, text = "暂存桶为空")
             }
         } else {
             LazyColumn(

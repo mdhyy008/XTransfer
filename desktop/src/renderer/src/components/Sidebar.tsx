@@ -338,7 +338,6 @@ export default function Sidebar({
   const [aliasTarget, setAliasTarget] = useState<Conversation | null>(null)
   const [aliasDraft, setAliasDraft] = useState('')
   const [testing, setTesting] = useState<string | null>(null)
-  const [testLeft, setTestLeft] = useState(0)
   const [testAvg, setTestAvg] = useState<Record<string, number>>({})
   const [liveSample, setLiveSample] = useState<{ id: string; value: number } | null>(null)
   useEffect(
@@ -446,32 +445,42 @@ export default function Sidebar({
   const startSpeedTest = async (id: string): Promise<void> => {
     if (testing) return
     setTesting(id)
-    setTestLeft(5)
     setLiveSample(null)
-    const started = Date.now()
-    const timer = setInterval(() => {
-      setTestLeft(Math.max(0, 5 - Math.floor((Date.now() - started) / 1000)))
-    }, 200)
     try {
       const result = await window.xt.speedTest(id)
-      setTestAvg((prev) => ({ ...prev, [id]: result.avg }))
+      setTestAvg((prev) => ({ ...prev, [id]: result.peak }))
     } catch (error) {
       notify(error instanceof Error ? error.message : '测试失败', 'error')
     } finally {
-      clearInterval(timer)
       setTesting(null)
       setLiveSample(null)
     }
   }
+
+  // 搜索要覆盖整段历史消息，不能只看最后一条预览。
+  const searchIndex = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const message of messages) {
+      const text = message.kind === 'text' ? message.body : message.file_name
+      if (!text) continue
+      const prev = map.get(message.conversation_id)
+      map.set(message.conversation_id, (prev ? `${prev}\n${text}` : text).toLowerCase())
+    }
+    return map
+  }, [messages])
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     if (!keyword) return conversations
     return conversations.filter((conv) => {
       const preview = previewOf(lastByConv.get(conv.id))
-      return conv.name.toLowerCase().includes(keyword) || preview.toLowerCase().includes(keyword)
+      return (
+        conv.name.toLowerCase().includes(keyword) ||
+        preview.toLowerCase().includes(keyword) ||
+        (searchIndex.get(conv.id)?.includes(keyword) ?? false)
+      )
     })
-  }, [conversations, lastByConv, query])
+  }, [conversations, lastByConv, query, searchIndex])
 
   const broadcast = filtered.find((conv) => conv.id === PUBLIC_CONVERSATION_ID)
   const dms = filtered.filter(
@@ -531,7 +540,8 @@ export default function Sidebar({
     ? bleRows.filter(
         (row) =>
           row.name.toLowerCase().includes(bleKeyword) ||
-          row.preview.toLowerCase().includes(bleKeyword)
+          row.preview.toLowerCase().includes(bleKeyword) ||
+          (searchIndex.get(row.id)?.includes(bleKeyword) ?? false)
       )
     : bleRows
 
@@ -631,7 +641,7 @@ export default function Sidebar({
           fullWidth
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索会话"
+          placeholder="搜索消息"
           slotProps={{
             input: {
               startAdornment: (
@@ -682,13 +692,13 @@ export default function Sidebar({
                   />
                 ))}
               {filtered.filter((conv) => !conv.id.startsWith(BLE_PREFIX)).length === 0 &&
-                (!hasBleDevices || shownBleRows.length === 0) && (
+                shownBleRows.length === 0 && (
                   <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
                     没有匹配的会话
                   </Typography>
                 )}
             </Section>
-            {hasBleDevices && shownBleRows.length > 0 && bleList(shownBleRows)}
+            {shownBleRows.length > 0 && bleList(shownBleRows)}
           </>
         ) : (
           <>
@@ -757,7 +767,15 @@ export default function Sidebar({
         onClose={() => setMenu(null)}
         anchorReference="anchorPosition"
         anchorPosition={menuShown ? { top: menuShown.y, left: menuShown.x } : undefined}
-        slotProps={{ paper: { sx: { minWidth: 180, borderRadius: '14px' } } }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 180,
+              borderRadius: '14px',
+              '& .MuiMenuItem-root': { minHeight: 32, py: 0, fontSize: 14 }
+            }
+          }
+        }}
       >
         <MenuItem
           disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
@@ -768,7 +786,7 @@ export default function Sidebar({
         >
           查看设备信息
         </MenuItem>
-        {menuIsBle && <Divider />}
+        <Divider />
         <MenuItem
           disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
           onClick={() => {
@@ -782,23 +800,26 @@ export default function Sidebar({
           备注名
         </MenuItem>
         {!menuIsBle && (
-          <MenuItem
-            disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
-            onClick={() => {
-              const conv = menu?.conv
-              setMenu(null)
-              if (!conv) return
-              const isBlocked = blocked.includes(conv.id)
-              patchSettings(
-                { blocked: toggleMember(blocked, conv.id, !isBlocked) },
-                isBlocked ? '已移出黑名单' : '已添加黑名单'
-              )
-            }}
-          >
-            {menuShown && blocked.includes(menuShown.conv.id) ? '移出黑名单' : '添加黑名单'}
-          </MenuItem>
+          <>
+            <Divider />
+            <MenuItem
+              disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
+              onClick={() => {
+                const conv = menu?.conv
+                setMenu(null)
+                if (!conv) return
+                const isBlocked = blocked.includes(conv.id)
+                patchSettings(
+                  { blocked: toggleMember(blocked, conv.id, !isBlocked) },
+                  isBlocked ? '已移出黑名单' : '已添加黑名单'
+                )
+              }}
+            >
+              {menuShown && blocked.includes(menuShown.conv.id) ? '移出黑名单' : '添加黑名单'}
+            </MenuItem>
+          </>
         )}
-        {menuIsBle && <Divider />}
+        <Divider />
         <MenuItem
           disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
           sx={{ gap: 2, pr: 1 }}
@@ -809,8 +830,9 @@ export default function Sidebar({
             patchSettings({ muted: toggleMember(muted, conv.id, !muted.includes(conv.id)) })
           }}
         >
-          <Typography sx={{ flex: 1 }}>免打扰</Typography>
+          <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
           <Switch
+            size="small"
             edge="end"
             checked={!!menuShown && muted.includes(menuShown.conv.id)}
             onClick={(event) => event.stopPropagation()}
@@ -821,7 +843,7 @@ export default function Sidebar({
             }}
           />
         </MenuItem>
-        {menuIsBle && <Divider />}
+        <Divider />
         <MenuItem
           disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
           sx={{ gap: 2, pr: 1 }}
@@ -833,8 +855,9 @@ export default function Sidebar({
             })
           }}
         >
-          <Typography sx={{ flex: 1 }}>置顶会话</Typography>
+          <Typography sx={{ flex: 1, fontSize: 14 }}>置顶会话</Typography>
           <Switch
+            size="small"
             edge="end"
             checked={!!menuShown && pinnedIds.includes(menuShown.conv.id)}
             onClick={(event) => event.stopPropagation()}
@@ -855,15 +878,18 @@ export default function Sidebar({
           清空聊天记录
         </MenuItem>
         {!menuIsBle && (
-          <MenuItem
-            sx={{ color: 'error.main' }}
-            onClick={() => {
-              setPendingDelete(menu?.conv ?? null)
-              setMenu(null)
-            }}
-          >
-            删除此设备
-          </MenuItem>
+          <>
+            <Divider />
+            <MenuItem
+              sx={{ color: 'error.main' }}
+              onClick={() => {
+                setPendingDelete(menu?.conv ?? null)
+                setMenu(null)
+              }}
+            >
+              删除此设备
+            </MenuItem>
+          </>
         )}
       </Menu>
 
@@ -928,7 +954,7 @@ export default function Sidebar({
                   if (pendingInfo) void startSpeedTest(pendingInfo.id)
                 }}
               >
-                {testing && testing === infoShown?.id ? `测试中 ${testLeft}s` : '测试'}
+                {testing && testing === infoShown?.id ? '测试中' : '测试'}
               </Button>
             </Box>
           )}

@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -138,9 +139,43 @@ fun AboutScreen(onBack: () -> Unit) {
                         }
                     }
                 )
+                SettingDivider()
+                SettingRow(
+                    icon = Icons.Rounded.Link,
+                    title = "官网",
+                    trailingText = "mdhyy.cn/tools/page/x-transfer",
+                    showChevron = true,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://mdhyy.cn/tools/page/x-transfer/")
+                                )
+                            )
+                        }
+                    }
+                )
             }
             SectionTitle("开源项目")
             SettingsGroup {
+                SettingRow(
+                    icon = Icons.Rounded.Code,
+                    title = "X互传",
+                    trailingText = "MIT",
+                    showChevron = true,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://github.com/mdhyy008/xlan-client")
+                                )
+                            )
+                        }
+                    }
+                )
+                SettingDivider()
                 SettingRow(
                     icon = Icons.Rounded.Code,
                     title = "xlan",

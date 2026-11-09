@@ -130,6 +130,16 @@ export type BleState = {
   advertising: boolean
   devices: BleDevice[]
   error?: string
+  version?: string
+  address?: string
+}
+
+export type WebChatStatus = {
+  running: boolean
+  url: string
+  port: number
+  online: number
+  error?: string
 }
 
 export type SeedColor = 'purple' | 'blue' | 'green' | 'orange'
@@ -145,6 +155,7 @@ export type Settings = {
   enterToSend: boolean
   misans: boolean
   bleEnabled: boolean
+  webChat: boolean
   blocked: string[]
   aliases: Record<string, string>
   muted: string[]
@@ -312,6 +323,9 @@ export type XtApi = {
   bleStart: () => Promise<BleState>
   bleStop: () => Promise<BleState>
   bleConnect: (peerId: string) => Promise<void>
+  webChatStatus: () => Promise<WebChatStatus>
+  webChatStart: () => Promise<WebChatStatus>
+  webChatStop: () => Promise<WebChatStatus>
   syncPublic: () => Promise<void>
   minimize: () => void
   toggleMaximize: () => void

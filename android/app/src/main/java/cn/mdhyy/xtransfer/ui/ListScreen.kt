@@ -327,13 +327,14 @@ fun ListScreen(
                             (hotspotSupported || wifiDirect.supported || ble.supported))
                     ) {
                         Spacer(Modifier.width(8.dp))
-                        Surface(
-                            onClick = { connectionsOpen = true },
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                .clickable { connectionsOpen = true }
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -918,19 +919,9 @@ private fun DeviceInfoDialog(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var testing by remember { mutableStateOf(false) }
-    var left by remember { mutableIntStateOf(5) }
     var live by remember { mutableLongStateOf(0L) }
     var testAvg by remember { mutableLongStateOf(0L) }
     var tested by remember { mutableStateOf(false) }
-
-    LaunchedEffect(testing) {
-        if (!testing) return@LaunchedEffect
-        left = 5
-        while (left > 0) {
-            delay(1000)
-            left -= 1
-        }
-    }
 
     val peak = when {
         testing -> live
@@ -983,7 +974,7 @@ private fun DeviceInfoDialog(
                         scope.launch {
                             try {
                                 val result = repo.speedTest(target.id) { sample -> live = sample }
-                                testAvg = result.avg
+                                testAvg = result.peak
                                 tested = true
                             } catch (error: Exception) {
                                 context.showError(error.message ?: "测试失败")
@@ -993,7 +984,7 @@ private fun DeviceInfoDialog(
                         }
                     }
                 ) {
-                    Text(if (testing) "测试中 ${left}s" else "测试")
+                    Text(if (testing) "测试中" else "测试")
                 }
             }
         }
