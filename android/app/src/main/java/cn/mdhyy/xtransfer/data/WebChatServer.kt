@@ -40,7 +40,7 @@ data class WebChatStatus(
 
 /**
  * 在局域网里开放网页聊天：浏览器访问本机地址即可用访客身份在公共频道聊天。
- * 发消息走和 xlan 相同的 UDP 43002 广播协议，所以其他设备看到的是独立访客。
+ * 发消息走和 xlan 相同的 UDP 43502 广播协议，所以其他设备看到的是独立访客。
  */
 class WebChatServer(
     context: Context,
@@ -362,7 +362,7 @@ class WebChatServer(
 
     private companion object {
         const val WEB_PORT = 43100
-        const val PUBLIC_PORT = 43002
+        const val PUBLIC_PORT = 43502
         const val MAX_BODY = 900
         const val MAX_REQUEST = 16 * 1024
         const val ACK_WINDOW_MS = 260L

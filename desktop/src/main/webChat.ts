@@ -7,7 +7,7 @@ import type { Item, WebChatStatus } from '../shared/types'
 import type { Db } from './db'
 
 const WEB_PORT = 43100
-const PUBLIC_PORT = 43002
+const PUBLIC_PORT = 43502
 const MAX_BODY = 900
 const GUEST_RE = /^web[0-9a-f]{10}$/
 const ACK_WINDOW_MS = 260
