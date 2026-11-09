@@ -31,11 +31,6 @@ const api: XtApi = {
     ipcRenderer.on('messages', handler)
     return () => ipcRenderer.removeListener('messages', handler)
   },
-  onClipboardCopied: (cb) => {
-    const handler = (_event: Electron.IpcRendererEvent, text: string): void => cb(text)
-    ipcRenderer.on('clipboard:copied', handler)
-    return () => ipcRenderer.removeListener('clipboard:copied', handler)
-  },
   scan: () => ipcRenderer.invoke('xlan:scan') as Promise<Snapshot>,
   sendText: (req: SendTextReq) => ipcRenderer.invoke('text:send', req),
   retryText: (id: string) => ipcRenderer.invoke('text:retry', id) as Promise<void>,

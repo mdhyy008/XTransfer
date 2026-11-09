@@ -77,8 +77,6 @@ type Props = {
   onSetPublicNotify: (enabled: boolean) => void
   alias?: string
   onSetAlias: (alias: string) => void
-  clipboardOn?: boolean
-  onSetClipboard: (enabled: boolean) => void
   muted?: boolean
   onSetMuted: (muted: boolean) => void
   onClearHistory: () => void
@@ -539,8 +537,6 @@ export default function ChatPane({
   onSetPublicNotify,
   alias,
   onSetAlias,
-  clipboardOn,
-  onSetClipboard,
   muted,
   onSetMuted,
   onClearHistory,
@@ -1177,20 +1173,6 @@ export default function ChatPane({
                 <>
                   <MenuItem
                     sx={{ gap: 2, pr: 1 }}
-                    // 开关项点文字、点开关都只切换状态，都不关菜单。
-                    onClick={() => onSetClipboard(!clipboardOn)}
-                  >
-                    <Typography sx={{ flex: 1, fontSize: 14 }}>接收跨设备复制</Typography>
-                    <Switch
-                      size="small"
-                      edge="end"
-                      checked={!!clipboardOn}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={(event) => onSetClipboard(event.target.checked)}
-                    />
-                  </MenuItem>
-                  <MenuItem
-                    sx={{ gap: 2, pr: 1 }}
                     onClick={() => onSetTrust(!trusted)}
                   >
                     <Typography sx={{ flex: 1, fontSize: 14 }}>自动接收文件</Typography>
@@ -1235,6 +1217,15 @@ export default function ChatPane({
                     }}
                   >
                     搜索历史记录
+                  </MenuItem>
+                  <Divider />
+                  <MenuItem
+                    onClick={() => {
+                      setTrustAnchor(null)
+                      setConfirmClear(true)
+                    }}
+                  >
+                    清空聊天记录
                   </MenuItem>
                 </>
               )}

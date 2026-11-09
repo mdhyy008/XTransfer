@@ -159,7 +159,6 @@ export type Settings = {
   blocked: string[]
   aliases: Record<string, string>
   muted: string[]
-  clipboardPeers: string[]
   pinned: string[]
   // 已删除的设备 → 删除时刻（秒）。设备再次被发现（last_seen 更新）后自然重新出现。
   hidden: Record<string, number>
@@ -257,7 +256,6 @@ export type XtApi = {
   getState: () => Promise<Snapshot>
   onState: (cb: (s: Snapshot) => void) => () => void
   onMessages: (cb: (messages: Message[]) => void) => () => void
-  onClipboardCopied: (cb: (text: string) => void) => () => void
   scan: () => Promise<Snapshot>
   sendText: (req: SendTextReq) => Promise<SendTextResp>
   retryText: (id: string) => Promise<void>

@@ -212,44 +212,48 @@ export default function FileManager({
         <Typography sx={{ flex: 1, fontSize: 18, fontWeight: 600, color: 'text.primary' }}>
           文件管理
         </Typography>
-        <TextField
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索"
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchRounded sx={{ fontSize: 18, color: 'text.secondary' }} />
-                </InputAdornment>
-              )
-            }
-          }}
-          sx={{ width: 220 }}
-        />
+        {entries.length > 0 && (
+          <TextField
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索"
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchRounded sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  </InputAdornment>
+                )
+              }
+            }}
+            sx={{ width: 220 }}
+          />
+        )}
       </Box>
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, px: 2.5, pb: 1.5 }}>
-        {categories.map((name) => {
-          const selected = name === category
-          return (
-            <Chip
-              key={name}
-              label={name}
-              size="small"
-              clickable
-              onClick={() => setCategory(name)}
-              sx={{
-                height: 28,
-                fontSize: 12.5,
-                borderRadius: '999px',
-                bgcolor: selected ? 'secondary.main' : 'action.hover',
-                color: selected ? 'secondary.contrastText' : 'text.secondary',
-                '&:hover': { bgcolor: selected ? 'secondary.main' : 'action.selected' }
-              }}
-            />
-          )
-        })}
-      </Box>
+      {entries.length > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, px: 2.5, pb: 1.5 }}>
+          {categories.map((name) => {
+            const selected = name === category
+            return (
+              <Chip
+                key={name}
+                label={name}
+                size="small"
+                clickable
+                onClick={() => setCategory(name)}
+                sx={{
+                  height: 28,
+                  fontSize: 12.5,
+                  borderRadius: '999px',
+                  bgcolor: selected ? 'secondary.main' : 'action.hover',
+                  color: selected ? 'secondary.contrastText' : 'text.secondary',
+                  '&:hover': { bgcolor: selected ? 'secondary.main' : 'action.selected' }
+                }}
+              />
+            )
+          })}
+        </Box>
+      )}
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1.5, pb: 2 }}>
         {groups.length === 0 ? (
           <Box

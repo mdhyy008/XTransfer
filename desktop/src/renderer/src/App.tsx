@@ -210,7 +210,6 @@ function Shell() {
         return touched ? { ...prev, messages } : prev
       })
     })
-    const offClipboard = window.xt.onClipboardCopied((text) => notify(text, 'info'))
     const offNavigate = window.xt.onNavigate((convId) => {
       if (convId) setSelectedId(convId)
     })
@@ -224,7 +223,6 @@ function Shell() {
       alive = false
       off()
       offMessages()
-      offClipboard()
       offNavigate()
       offUiAction()
     }
@@ -734,20 +732,6 @@ function Shell() {
               window.xt
                 .updateSettings({ aliases })
                 .then(() => notify(next ? '已保存' : '已清除备注名'))
-                .catch((error) =>
-                  notify(error instanceof Error ? error.message : '操作失败', 'error')
-                )
-            }}
-            clipboardOn={snapshot?.settings.clipboardPeers?.includes(conv.id) ?? false}
-            onSetClipboard={(enabled) => {
-              const list = snapshot?.settings.clipboardPeers ?? []
-              const next = enabled
-                ? list.includes(conv.id)
-                  ? list
-                  : [...list, conv.id]
-                : list.filter((id) => id !== conv.id)
-              window.xt
-                .updateSettings({ clipboardPeers: next })
                 .catch((error) =>
                   notify(error instanceof Error ? error.message : '操作失败', 'error')
                 )

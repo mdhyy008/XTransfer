@@ -16,7 +16,6 @@ const DEFAULTS: Settings = {
   blocked: [],
   aliases: {},
   muted: [],
-  clipboardPeers: [],
   pinned: [],
   hidden: {}
 }
@@ -71,7 +70,6 @@ export class SettingsStore {
         blocked: strList(raw.blocked),
         aliases: aliasMap(raw.aliases),
         muted: strList(raw.muted),
-        clipboardPeers: strList(raw.clipboardPeers),
         pinned: strList(raw.pinned),
         hidden: timeMap(raw.hidden)
       }

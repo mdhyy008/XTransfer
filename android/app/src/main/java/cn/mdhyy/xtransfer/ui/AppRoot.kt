@@ -383,8 +383,6 @@ fun AppRoot(
                 onSetPublicNotify = { repo.settingsStore().update(publicNotifications = it) },
                 alias = settings.aliases[id].orEmpty(),
                 onSetAlias = { repo.setAlias(id, it) },
-                clipboardOn = id in settings.clipboardPeers,
-                onSetClipboard = { repo.setClipboard(id, it) },
                 muted = id in settings.muted,
                 onSetMuted = { repo.setMuted(id, it) },
                 onOpenBucket = { bucketOpen = true },

@@ -1,7 +1,6 @@
 import {
   app,
   BrowserWindow,
-  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -2117,15 +2116,6 @@ function watchRecvDir(dir: string): void {
   }
 }
 
-function platformLabelOf(platform: string): string {
-  const raw = platform.toLowerCase()
-  if (raw.includes('win')) return 'Windows'
-  if (raw.includes('android')) return 'Android'
-  if (raw.includes('mac') || raw.includes('darwin')) return 'macOS'
-  if (raw.includes('linux')) return 'Linux'
-  return ''
-}
-
 function notifyItem(item: Item): void {
   if (item.from_id && item.from_id === state.info?.id) return
   const convId =
@@ -2134,17 +2124,6 @@ function notifyItem(item: Item): void {
       : item.channel === 'ble'
         ? `${BLE_PREFIX}${item.from_id}`
         : item.from_id
-  if (item.channel !== 'public' && convId && settings.value.clipboardPeers.includes(convId)) {
-    const text = item.body ?? ''
-    if (item.kind === 'text' && text) {
-      clipboard.writeText(text)
-      const platform = platformLabelOf(item.platform || state.peers.get(item.from_id)?.platform || '')
-      const who = platform ? `${platform}平台` : item.from_name || item.from_id || '对端'
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send('clipboard:copied', `${who}复制了文本`)
-      }
-    }
-  }
   if (!settings.value.notifications) return
   if (item.channel === 'public' && !settings.value.publicNotifications) return
   if (item.channel !== 'public' && convId && settings.value.muted.includes(convId)) {
@@ -2836,7 +2815,6 @@ function registerIpc(): void {
     const next: Partial<Settings> = {
       blocked: (current.blocked ?? []).filter((id) => !ids.has(id)),
       muted: (current.muted ?? []).filter((id) => !ids.has(id)),
-      clipboardPeers: (current.clipboardPeers ?? []).filter((id) => !ids.has(id)),
       pinned: (current.pinned ?? []).filter((id) => !ids.has(id)),
       hidden
     }

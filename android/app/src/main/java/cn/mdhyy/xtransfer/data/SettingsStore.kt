@@ -20,7 +20,6 @@ data class AppSettings(
     val blocked: Set<String> = emptySet(),
     val aliases: Map<String, String> = emptyMap(),
     val muted: Set<String> = emptySet(),
-    val clipboardPeers: Set<String> = emptySet(),
     val pinned: Set<String> = emptySet(),
     // 已删除的设备 → 删除时刻（秒）。设备再次被发现（lastSeen 更新）后自然重新出现。
     val hidden: Map<String, Long> = emptyMap()
@@ -41,7 +40,6 @@ class SettingsStore(context: Context) {
             blocked = prefs.getStringSet("blocked", emptySet()) ?: emptySet(),
             aliases = readAliases(prefs.getString("aliases", null)),
             muted = prefs.getStringSet("muted", emptySet()) ?: emptySet(),
-            clipboardPeers = prefs.getStringSet("clipboardPeers", emptySet()) ?: emptySet(),
             pinned = prefs.getStringSet("pinned", emptySet()) ?: emptySet(),
             hidden = readTimeMap(prefs.getString("hidden", null))
         )
@@ -60,7 +58,6 @@ class SettingsStore(context: Context) {
         blocked: Set<String>? = null,
         aliases: Map<String, String>? = null,
         muted: Set<String>? = null,
-        clipboardPeers: Set<String>? = null,
         pinned: Set<String>? = null,
         hidden: Map<String, Long>? = null
     ) {
@@ -77,7 +74,6 @@ class SettingsStore(context: Context) {
             blocked = blocked ?: current.blocked,
             aliases = aliases ?: current.aliases,
             muted = muted ?: current.muted,
-            clipboardPeers = clipboardPeers ?: current.clipboardPeers,
             pinned = pinned ?: current.pinned,
             hidden = hidden ?: current.hidden
         )
@@ -93,7 +89,6 @@ class SettingsStore(context: Context) {
             .putStringSet("blocked", next.blocked)
             .putString("aliases", JSONObject(next.aliases).toString())
             .putStringSet("muted", next.muted)
-            .putStringSet("clipboardPeers", next.clipboardPeers)
             .putStringSet("pinned", next.pinned)
             .putString("hidden", JSONObject(next.hidden.toMap()).toString())
             .apply()

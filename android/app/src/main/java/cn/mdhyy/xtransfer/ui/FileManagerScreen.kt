@@ -217,30 +217,32 @@ fun FileManagerScreen(
                 .fillMaxWidth()
                 .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp)
         )
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("搜索") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            singleLine = true,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            categories.forEach { name ->
-                FilterChip(
-                    selected = name == active,
-                    onClick = { category = name },
-                    label = { Text(name) }
-                )
+        if (files.isNotEmpty()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                categories.forEach { name ->
+                    FilterChip(
+                        selected = name == active,
+                        onClick = { category = name },
+                        label = { Text(name) }
+                    )
+                }
             }
         }
         if (groups.isEmpty()) {

@@ -1,8 +1,6 @@
 package cn.mdhyy.xtransfer.data
 
 import android.app.Application
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -232,9 +230,9 @@ class Repository(
 
     fun attachBle(manager: BleManager) {
         ble = manager
-        manager.onInbound = { fromId, fromName, platform, body, ts ->
+        manager.onInbound = { fromId, fromName, _, body, ts ->
             scope.launch {
-                runCatching { insertBleInbound(fromId, fromName, platform, body, ts) }
+                runCatching { insertBleInbound(fromId, fromName, body, ts) }
             }
         }
         manager.onFileOffer = { peerId, id, fromName, platform, name, size, ts ->
@@ -849,15 +847,6 @@ class Repository(
         val fromId = item.optString("from_id")
         if (fromId == _info.value?.id) return
         val isPublic = item.optString("channel") == "public"
-        if (!isPublic && fromId.isNotEmpty() && item.optString("kind") == "text") {
-            copyToClipboard(
-                convId = fromId,
-                platform = item.optString("platform"),
-                fromId = fromId,
-                fromName = item.optString("from_name"),
-                text = item.optString("body")
-            )
-        }
         if (!settings.value.notifications) return
         if (isPublic && !settings.value.publicNotifications) return
         if (!isPublic && fromId in settings.value.muted) {
@@ -880,32 +869,6 @@ class Repository(
             else -> "发来文件 $name"
         }
         Notifications.message(app, title, body, convId)
-    }
-
-    /** 会话开了「接收跨设备复制」时把对端文本写进本机剪贴板，并提示是谁复制的。 */
-    private fun copyToClipboard(convId: String, platform: String, fromId: String, fromName: String, text: String) {
-        if (text.isEmpty() || convId !in settings.value.clipboardPeers) return
-        val copied = runCatching {
-            app.getSystemService(ClipboardManager::class.java)
-                ?.setPrimaryClip(ClipData.newPlainText("X互传", text))
-        }.isSuccess
-        if (!copied) return
-        val peer = _peers.value.find { it.id == fromId }
-        val raw = platform.ifBlank { peer?.platform ?: "" }
-        val label = when {
-            raw.contains("win", true) -> "Windows"
-            raw.contains("android", true) -> "Android"
-            raw.contains("mac", true) || raw.contains("darwin", true) -> "macOS"
-            raw.contains("linux", true) -> "Linux"
-            else -> null
-        }
-        val name = fromName.takeIf { it.isNotBlank() }
-            ?: peer?.name?.takeIf { it.isNotBlank() }
-            ?: fromId
-        val message = if (label != null) "${label}平台复制了文本" else "$name 复制了文本"
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(app, message, Toast.LENGTH_SHORT).show()
-        }
     }
 
     // ---------- 发文本 / 决策 / 已读 / 信任 ----------
@@ -1050,7 +1013,6 @@ class Repository(
     private suspend fun insertBleInbound(
         fromId: String,
         fromName: String,
-        platform: String,
         body: String,
         ts: Long
     ) {
@@ -1075,13 +1037,6 @@ class Repository(
             )
         )
         db.conversationDao().touch(convId, createdAt)
-        copyToClipboard(
-            convId = convId,
-            platform = platform,
-            fromId = fromId,
-            fromName = fromName,
-            text = body
-        )
         if (settings.value.notifications && !XlanApp.foreground) {
             Notifications.message(
                 app,
@@ -1370,7 +1325,6 @@ class Repository(
         settingsStore.update(
             blocked = current.blocked - id,
             muted = current.muted - id,
-            clipboardPeers = current.clipboardPeers - id,
             pinned = current.pinned - id,
             aliases = current.aliases - id,
             hidden = current.hidden + (id to now())
@@ -1422,12 +1376,6 @@ class Repository(
         val next = settings.value.muted.toMutableSet()
         if (muted) next += id else next -= id
         settingsStore.update(muted = next)
-    }
-
-    fun setClipboard(id: String, on: Boolean) {
-        val next = settings.value.clipboardPeers.toMutableSet()
-        if (on) next += id else next -= id
-        settingsStore.update(clipboardPeers = next)
     }
 
     fun setPinned(id: String, pinned: Boolean) {

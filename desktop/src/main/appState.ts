@@ -32,7 +32,6 @@ export class AppState {
     blocked: [],
     aliases: {},
     muted: [],
-    clipboardPeers: [],
     pinned: [],
     hidden: {}
   }

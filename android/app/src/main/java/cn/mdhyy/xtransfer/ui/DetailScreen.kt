@@ -164,8 +164,6 @@ fun DetailScreen(
     onSetPublicNotify: (Boolean) -> Unit,
     alias: String,
     onSetAlias: (String) -> Unit,
-    clipboardOn: Boolean,
-    onSetClipboard: (Boolean) -> Unit,
     muted: Boolean,
     onSetMuted: (Boolean) -> Unit,
     onOpenBucket: () -> Unit,
@@ -652,17 +650,6 @@ fun DetailScreen(
                             )
                         } else if (target != null) {
                             DropdownMenuItem(
-                                text = { Text("接收跨设备复制") },
-                                // 开关项点文字、点开关都只切换状态，都不关菜单。
-                                onClick = { onSetClipboard(!clipboardOn) },
-                                trailingIcon = {
-                                    Switch(
-                                        checked = clipboardOn,
-                                        onCheckedChange = { onSetClipboard(it) }
-                                    )
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("自动接收文件") },
                                 onClick = { onSetTrust(target.trusted != true) },
                                 trailingIcon = {
@@ -696,6 +683,14 @@ fun DetailScreen(
                                     menuOpen = false
                                     searchQuery = ""
                                     searchOpen = true
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("清空聊天记录") },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmClear = true
                                 }
                             )
                         }
