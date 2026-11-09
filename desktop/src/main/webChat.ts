@@ -18,6 +18,7 @@ type WebChatOptions = {
   db: Db
   selfId: () => string
   host: () => string
+  peers: () => { addr?: string }[]
   onChange: () => void
 }
 
@@ -49,7 +50,7 @@ function broadcastOf(ip: string, mask: string | undefined): string | null {
   return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.')
 }
 
-function broadcastTargets(): string[] {
+function broadcastTargets(peers: { addr?: string }[]): string[] {
   const targets = new Set<string>()
   for (const list of Object.values(os.networkInterfaces())) {
     for (const address of list ?? []) {
@@ -59,6 +60,10 @@ function broadcastTargets(): string[] {
       const broadcast = broadcastOf(address.address, address.netmask)
       if (broadcast) targets.add(broadcast)
     }
+  }
+  // 有些网卡或无线 AP 不放行广播包，再按已发现的设备逐个单播一份。
+  for (const peer of peers) {
+    if (peer.addr && ipToInt(peer.addr) !== null) targets.add(peer.addr)
   }
   if (targets.size === 0) targets.add('255.255.255.255')
   return [...targets]
@@ -250,7 +255,7 @@ export class WebChatService {
   private broadcast(packet: Record<string, unknown>): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = dgram.createSocket('udp4')
-      const targets = broadcastTargets()
+      const targets = broadcastTargets(this.options.peers())
       const data = Buffer.from(JSON.stringify(packet))
       let sent = 0
       let failed = 0

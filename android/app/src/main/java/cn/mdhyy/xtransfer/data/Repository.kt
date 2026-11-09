@@ -487,14 +487,9 @@ class Repository(
 
     suspend fun scan() {
         val current = api ?: throw IllegalStateException("服务未运行")
-        val json = withContext(Dispatchers.IO) { current.post("/v1/scan?deep=1", JSONObject()) }
-        val seen = buildSet {
-            val array = json.optJSONArray("peers") ?: JSONArray()
-            for (i in 0 until array.length()) add(array.getJSONObject(i).optString("id"))
-        }
+        // 扫描只负责发现新设备；在线状态仍按心跳窗口判定，否则一次漏应答就让设备闪成离线。
+        withContext(Dispatchers.IO) { current.post("/v1/scan?deep=1", JSONObject()) }
         refreshPeers()
-        // 手动刷新以这次扫描为准：没应答的直接判离线，不用等窗口过期。
-        _peers.value = _peers.value.map { if (it.id in seen) it else it.copy(lastSeen = 0) }
         refreshInbox()
     }
 

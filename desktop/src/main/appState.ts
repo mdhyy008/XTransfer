@@ -95,17 +95,6 @@ export class AppState {
     if (changed) this.emit()
   }
 
-  // 主动刷新时以这次扫描结果为准：没应答的直接判离线。
-  markUnseenOffline(seen: Set<string>): void {
-    let changed = false
-    for (const [id, peer] of this.peers) {
-      if (seen.has(id) || peer.last_seen === 0) continue
-      this.peers.set(id, { ...peer, last_seen: 0 })
-      changed = true
-    }
-    if (changed) this.emit()
-  }
-
   // 设备静默消失时不会有任何事件，靠定时重算把在线状态翻过来，变了才推送界面。
   refreshOnline(): void {
     const nowSec = Date.now() / 1000

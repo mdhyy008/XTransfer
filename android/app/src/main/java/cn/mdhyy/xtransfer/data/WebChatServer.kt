@@ -262,6 +262,11 @@ class WebChatServer(
                 broadcastOf(ip, prefix)?.let { targets.add(it) }
             }
         }
+        // 有些无线 AP 不放行广播包，再按已发现的设备逐个单播一份。
+        for (peer in repo.peers.value) {
+            val addr = peer.addr ?: continue
+            if (broadcastOf(addr, 32) != null) targets.add(addr)
+        }
         targets.add("255.255.255.255")
         return targets.toList()
     }

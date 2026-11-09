@@ -1033,6 +1033,7 @@ const webChat = new WebChatService({
   db,
   selfId: () => state.info?.id ?? '',
   host: () => shareHost(),
+  peers: () => state.snapshot().peers,
   onChange: () => state.emit()
 })
 
@@ -2205,10 +2206,9 @@ function createTray(): void {
 }
 
 async function scanPeers(): Promise<Snapshot> {
-  const res = await apiPost<{ ok: boolean; peers?: Peer[] }>('/v1/scan?deep=1', {})
+  await apiPost<{ ok: boolean; peers?: Peer[] }>('/v1/scan?deep=1', {})
   await refreshPeers()
-  // 手动刷新以这次扫描为准：没应答的直接判离线，不用等窗口过期。
-  state.markUnseenOffline(new Set((res.peers ?? []).map((peer) => peer.id)))
+  // 扫描只负责发现新设备；在线状态仍按心跳窗口判定，否则一次漏应答就让设备闪成离线。
   await refreshInbox(lastItemTs > 0 ? lastItemTs - 5 : 0)
   state.emit()
   return state.snapshot()
