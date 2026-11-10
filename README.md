@@ -70,7 +70,7 @@
 ## 目录结构
 
 ```
-xlan-client/
+XTransfer/
   desktop/          桌面客户端（Electron，Windows / Linux / macOS）
   android/          Android 客户端（Kotlin + Compose）
   relay/            公网聊天中继服务（Go）
