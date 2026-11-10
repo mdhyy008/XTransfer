@@ -141,6 +141,30 @@ const api: XtApi = {
   webChatStatus: () => ipcRenderer.invoke('webchat:status') as Promise<WebChatStatus>,
   webChatStart: () => ipcRenderer.invoke('webchat:start') as Promise<WebChatStatus>,
   webChatStop: () => ipcRenderer.invoke('webchat:stop') as Promise<WebChatStatus>,
+  relayCreate: (name: string) => ipcRenderer.invoke('relay:create', name) as Promise<string>,
+  relayJoin: (code: string) => ipcRenderer.invoke('relay:join', code) as Promise<string>,
+  relayLeave: (roomId: string) => ipcRenderer.invoke('relay:leave', roomId) as Promise<void>,
+  relaySend: (roomId: string, body: string) =>
+    ipcRenderer.invoke('relay:send', roomId, body) as Promise<void>,
+  relaySendFiles: (roomId: string, paths: string[]) =>
+    ipcRenderer.invoke('relay:sendFiles', roomId, paths) as Promise<void>,
+  relayRecall: (roomId: string, messageId: string) =>
+    ipcRenderer.invoke('relay:recall', roomId, messageId) as Promise<void>,
+  relayKick: (roomId: string, deviceId: string) =>
+    ipcRenderer.invoke('relay:kick', roomId, deviceId) as Promise<void>,
+  relayRename: (roomId: string, name: string) =>
+    ipcRenderer.invoke('relay:rename', roomId, name) as Promise<void>,
+  relayMembers: (roomId: string) =>
+    ipcRenderer.invoke('relay:members', roomId) as Promise<void>,
+  relayTest: (address: string) =>
+    ipcRenderer.invoke('relay:test', address) as Promise<{
+      ok: boolean
+      name?: string
+      error?: string
+    }>,
+  relayDownload: (messageId: string) =>
+    ipcRenderer.invoke('relay:download', messageId) as Promise<string>,
+  relayCache: (messageId: string) => ipcRenderer.invoke('relay:cache', messageId) as Promise<string>,
   syncPublic: () => ipcRenderer.invoke('public:sync') as Promise<void>,
   minimize: () => ipcRenderer.send('win:minimize'),
   toggleMaximize: () => ipcRenderer.send('win:toggleMaximize'),

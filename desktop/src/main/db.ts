@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
   error_code      TEXT,
   xlan_item_id    TEXT,
   offer_id        TEXT,
+  relay_file_id   TEXT,
+  recalled        INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL
 );
@@ -86,6 +88,13 @@ export class Db {
     this.db = new Database(path.join(dir, 'xt.db'))
     this.db.pragma('journal_mode = WAL')
     this.db.exec(SCHEMA)
+    const columns = this.db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]
+    if (!columns.some((column) => column.name === 'recalled')) {
+      this.db.exec('ALTER TABLE messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!columns.some((column) => column.name === 'relay_file_id')) {
+      this.db.exec('ALTER TABLE messages ADD COLUMN relay_file_id TEXT')
+    }
     this.ensureConversation(PUBLIC_CONVERSATION_ID, '局域网广播', undefined)
   }
 
@@ -473,6 +482,111 @@ export class Db {
     this.touchConversation(params.convId, ts)
   }
 
+  // 公网聊天室的会话统一用 relay: 前缀，房间消息复用现有消息表。
+  ensureRelayConversation(roomId: string, name: string): string {
+    const convId = `relay:${roomId}`
+    this.ensureConversation(convId, name)
+    return convId
+  }
+
+  upsertRelayMessage(params: {
+    id: string
+    roomId: string
+    roomName: string
+    direction: 'in' | 'out'
+    fromId: string
+    fromName: string
+    kind: 'text' | 'file'
+    body?: string
+    fileName?: string
+    fileSize?: number
+    fileId?: string
+    localPath?: string
+    status: MessageStatus
+    recalled?: boolean
+    createdAt: number
+  }): void {
+    if (!params.id || !params.roomId) return
+    const convId = this.ensureRelayConversation(params.roomId, params.roomName)
+    const ts = params.createdAt || now()
+    const total = params.fileSize ?? 0
+    this.db
+      .prepare(
+        `INSERT INTO messages (id, conversation_id, direction, kind, channel, from_id, from_name,
+           body, file_name, file_size, relay_file_id, local_path, status, received, total, recalled,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'relay', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           status = CASE
+             WHEN messages.status IN ('done', 'duplicate') AND excluded.status = 'active'
+               THEN messages.status
+             ELSE excluded.status END,
+           from_name = excluded.from_name,
+           body = COALESCE(excluded.body, messages.body),
+           file_name = COALESCE(excluded.file_name, messages.file_name),
+           file_size = COALESCE(excluded.file_size, messages.file_size),
+           relay_file_id = COALESCE(excluded.relay_file_id, messages.relay_file_id),
+           local_path = COALESCE(messages.local_path, excluded.local_path),
+           received = MAX(messages.received, excluded.received),
+           total = MAX(messages.total, excluded.total),
+           recalled = MAX(messages.recalled, excluded.recalled),
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        params.id,
+        convId,
+        params.direction,
+        params.kind,
+        params.fromId,
+        params.fromName || params.fromId,
+        params.body ?? null,
+        params.fileName ?? null,
+        params.fileSize ?? null,
+        params.fileId ?? null,
+        params.localPath ?? null,
+        params.status,
+        params.status === 'done' ? total : 0,
+        total,
+        params.recalled ? 1 : 0,
+        ts,
+        now()
+      )
+    this.touchConversation(convId, ts)
+  }
+
+  setRelayFileId(id: string, fileId: string): void {
+    this.db.prepare('UPDATE messages SET relay_file_id = ? WHERE id = ?').run(fileId, id)
+  }
+
+  getRelayFileId(id: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT relay_file_id FROM messages WHERE id = ?')
+      .get(id) as { relay_file_id?: string } | undefined
+    return row?.relay_file_id || undefined
+  }
+
+  setRelayFile(id: string, localPath: string, status: MessageStatus): void {
+    this.db
+      .prepare(
+        `UPDATE messages SET local_path = ?, status = ?, received = total, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(localPath, status, now(), id)
+  }
+
+  setRelayStatus(id: string, status: MessageStatus): void {
+    this.db.prepare('UPDATE messages SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), id)
+  }
+
+  recallMessage(id: string): void {
+    this.db.prepare('UPDATE messages SET recalled = 1, updated_at = ? WHERE id = ?').run(now(), id)
+  }
+
+  deleteRelayConversations(): void {
+    this.db.prepare("DELETE FROM messages WHERE conversation_id LIKE 'relay:%'").run()
+    this.db.prepare("DELETE FROM conversations WHERE peer_id LIKE 'relay:%'").run()
+  }
+
   getMessage(id: string): Message | undefined {
     return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Message | undefined
   }
@@ -550,9 +664,10 @@ export class Db {
   }
 
   listMessages(): Message[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM messages ORDER BY created_at ASC, rowid ASC')
-      .all() as Message[]
+      .all() as (Omit<Message, 'recalled'> & { recalled?: number | boolean })[]
+    return rows.map((row) => ({ ...row, recalled: row.recalled === 1 || row.recalled === true }))
   }
 
   listPublicTexts(

@@ -22,11 +22,22 @@ import {
   useTheme
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
+import AddRounded from '@mui/icons-material/AddRounded'
 import BluetoothRounded from '@mui/icons-material/BluetoothRounded'
 import CampaignRounded from '@mui/icons-material/CampaignRounded'
+import ForumRounded from '@mui/icons-material/ForumRounded'
+import PublicRounded from '@mui/icons-material/PublicRounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
-import type { BleState, Conversation, Message, Peer, Settings } from '../../../shared/types'
+import WifiOffRounded from '@mui/icons-material/WifiOffRounded'
+import type {
+  BleState,
+  Conversation,
+  Message,
+  Peer,
+  RelayState,
+  Settings
+} from '../../../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../../../shared/types'
 import { formatSize, formatWhen, lastMessageMap, previewOf } from '../model'
 import PlatformIcon from './PlatformIcon'
@@ -44,15 +55,47 @@ type Props = {
   serviceRunning: boolean
   settings?: Settings
   bluetooth?: BleState
+  relay?: RelayState
   notify: (text: string, severity?: 'success' | 'error' | 'warning' | 'info') => void
+  lanOffline: boolean
+  onOpenConnections: () => void
 }
 
 const BLE_PREFIX = 'ble:'
+const RELAY_PREFIX = 'relay:'
 
 function ConvAvatar({ conv }: { conv: Conversation }) {
   const theme = useTheme()
+  const relayRoom = conv.id === `${RELAY_PREFIX}public`
+  const relay = conv.id.startsWith(RELAY_PREFIX)
   const avatar =
-    conv.id === PUBLIC_CONVERSATION_ID ? (
+    relay ? (
+      <Badge
+        overlap="circular"
+        variant="dot"
+        invisible={!conv.online}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        sx={{
+          '& .MuiBadge-badge': {
+            bgcolor: 'success.main',
+            boxShadow: `0 0 0 2px ${theme.palette.background.default}`
+          }
+        }}
+      >
+        <Avatar
+          variant="rounded"
+          sx={{
+            width: 40,
+            height: 40,
+            borderRadius: '14px',
+            bgcolor: 'secondary.main',
+            color: 'secondary.contrastText'
+          }}
+        >
+          {relayRoom ? <PublicRounded fontSize="small" /> : <ForumRounded fontSize="small" />}
+        </Avatar>
+      </Badge>
+    ) : conv.id === PUBLIC_CONVERSATION_ID ? (
       <Avatar
         variant="rounded"
         sx={{
@@ -132,6 +175,7 @@ function ConvRow({
   conv,
   last,
   badge,
+  subtitle,
   selected,
   onSelect,
   onContextMenu
@@ -139,6 +183,7 @@ function ConvRow({
   conv: Conversation
   last?: Message
   badge?: string
+  subtitle?: string
   selected: boolean
   onSelect: () => void
   onContextMenu: (event: React.MouseEvent) => void
@@ -200,7 +245,9 @@ function ConvRow({
             opacity: selected ? 0.85 : 1
           }}
         >
-          {previewOf(last) || (conv.id === PUBLIC_CONVERSATION_ID ? '公共频道' : conv.online ? '在线' : '离线')}
+          {previewOf(last) ||
+            subtitle ||
+            (conv.id === PUBLIC_CONVERSATION_ID ? '公共频道' : conv.online ? '在线' : '离线')}
         </Typography>
       </Box>
       <RowBadge label={badge} count={conv.unread} />
@@ -328,9 +375,16 @@ export default function Sidebar({
   serviceRunning,
   settings,
   bluetooth,
-  notify
+  relay,
+  notify,
+  lanOffline,
+  onOpenConnections
 }: Props) {
   const [query, setQuery] = useState('')
+  const [roomOpen, setRoomOpen] = useState(false)
+  const [roomName, setRoomName] = useState('')
+  const [roomCode, setRoomCode] = useState('')
+  const [roomBusy, setRoomBusy] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; conv: Conversation } | null>(null)
   const [pendingClear, setPendingClear] = useState<Conversation | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
@@ -350,6 +404,8 @@ export default function Sidebar({
   useRightClickDismiss(menu !== null, () => setMenu(null))
   const menuShown = useRetained(menu)
   const menuIsBle = menuShown?.conv.id.startsWith(BLE_PREFIX) ?? false
+  const menuIsRelay = menuShown?.conv.id.startsWith(RELAY_PREFIX) ?? false
+  const menuRelayPublic = menuShown?.conv.id === `${RELAY_PREFIX}public`
   const clearShown = useRetained(pendingClear)
   const deleteShown = useRetained(pendingDelete)
   const infoShown = useRetained(pendingInfo)
@@ -359,7 +415,7 @@ export default function Sidebar({
     [peers]
   )
   const badgeFor = (conv: Conversation): string | undefined => {
-    if (conv.id === PUBLIC_CONVERSATION_ID) return undefined
+    if (conv.id === PUBLIC_CONVERSATION_ID || conv.id.startsWith(RELAY_PREFIX)) return undefined
     const segment = addrById.get(conv.id)?.split('.').pop()
     return segment ? `#${segment}` : undefined
   }
@@ -394,6 +450,50 @@ export default function Sidebar({
     // 局域网广播没有设备类操作，操作都在聊天页右上角。
     if (conv.id === PUBLIC_CONVERSATION_ID) return
     setMenu({ x: event.clientX, y: event.clientY, conv })
+  }
+
+  const createRoom = async (): Promise<void> => {
+    const name = roomName.trim()
+    if (!name || roomBusy) return
+    setRoomBusy(true)
+    try {
+      const roomId = await window.xt.relayCreate(name)
+      setRoomOpen(false)
+      setRoomName('')
+      onSelect(`${RELAY_PREFIX}${roomId}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '创建失败', 'error')
+    } finally {
+      setRoomBusy(false)
+    }
+  }
+
+  const joinRoom = async (): Promise<void> => {
+    const code = roomCode.trim()
+    if (!/^\d{6}$/.test(code) || roomBusy) {
+      notify('房间号是六位数字', 'warning')
+      return
+    }
+    setRoomBusy(true)
+    try {
+      const roomId = await window.xt.relayJoin(code)
+      setRoomOpen(false)
+      setRoomCode('')
+      onSelect(`${RELAY_PREFIX}${roomId}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '加入失败', 'error')
+    } finally {
+      setRoomBusy(false)
+    }
+  }
+
+  const leaveRoom = async (conv: Conversation): Promise<void> => {
+    try {
+      await window.xt.relayLeave(conv.id.slice(RELAY_PREFIX.length))
+      if (conv.id === selectedId) onSelect(PUBLIC_CONVERSATION_ID)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '退出失败', 'error')
+    }
   }
 
   // 蓝牙设备不一定已经落过会话，按行数据拼一个对象给菜单用。
@@ -483,8 +583,21 @@ export default function Sidebar({
   }, [conversations, lastByConv, query, searchIndex])
 
   const broadcast = filtered.find((conv) => conv.id === PUBLIC_CONVERSATION_ID)
+  const relayRows = filtered.filter((conv) => conv.id.startsWith(RELAY_PREFIX))
+  const relayOrder = useMemo(() => {
+    const order = new Map((relay?.rooms ?? []).map((room, index) => [`${RELAY_PREFIX}${room.id}`, index]))
+    return order
+  }, [relay?.rooms])
+  relayRows.sort(
+    (a, b) =>
+      (relayOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+      (relayOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+  )
   const dms = filtered.filter(
-    (conv) => conv.id !== PUBLIC_CONVERSATION_ID && !conv.id.startsWith(BLE_PREFIX)
+    (conv) =>
+      conv.id !== PUBLIC_CONVERSATION_ID &&
+      !conv.id.startsWith(BLE_PREFIX) &&
+      !conv.id.startsWith(RELAY_PREFIX)
   )
   const pinnedDms = dms.filter((conv) => pinnedIds.includes(conv.id))
   const rest = dms.filter((conv) => !pinnedIds.includes(conv.id))
@@ -674,6 +787,43 @@ export default function Sidebar({
         </Tooltip>
       </Box>
 
+      {lanOffline && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            mx: 2,
+            mb: 1,
+            px: 1.5,
+            py: 1,
+            borderRadius: '12px',
+            bgcolor: 'error.main',
+            color: 'error.contrastText'
+          }}
+        >
+          <WifiOffRounded sx={{ fontSize: 18, flexShrink: 0 }} />
+          <Typography sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 500 }}>
+            当前设备未连接到局域网
+          </Typography>
+          <Button
+            size="small"
+            onClick={onOpenConnections}
+            sx={{
+              flexShrink: 0,
+              minWidth: 0,
+              px: 0.5,
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: 'inherit',
+              textDecoration: 'underline'
+            }}
+          >
+            查看解决方法
+          </Button>
+        </Box>
+      )}
+
       <Box sx={{ flex: 1, overflowY: 'auto', pb: 2 }}>
         {searching ? (
           <>
@@ -752,8 +902,40 @@ export default function Sidebar({
                   ))}
               </Section>
             )}
+            {(relay?.connected || relayRows.length > 0) && (
+              <Section
+                title="公网"
+                action={
+                  <Tooltip title="创建或加入房间">
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={relay?.connected !== true}
+                        onClick={() => setRoomOpen(true)}
+                      >
+                        <AddRounded fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                }
+              >
+                {relayRows.map((conv) => (
+                  <ConvRow
+                    key={`relay-${conv.id}`}
+                    conv={conv}
+                    last={lastByConv.get(conv.id)}
+                    subtitle={
+                      relay?.connected ? '已连接' : relay?.connecting ? '正在连接' : '未连接'
+                    }
+                    selected={conv.id === selectedId}
+                    onSelect={() => onSelect(conv.id)}
+                    onContextMenu={(event) => openMenu(event, conv)}
+                  />
+                ))}
+              </Section>
+            )}
             {hasBleDevices && normalBleRows.length > 0 && bleList(normalBleRows)}
-            {dms.length === 0 && !hasBleDevices && (
+            {dms.length === 0 && !hasBleDevices && relayRows.length === 0 && (
               <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
                 暂无设备
               </Typography>
@@ -777,30 +959,43 @@ export default function Sidebar({
           }
         }}
       >
-        <MenuItem
-          disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
-          onClick={() => {
-            setPendingInfo(menu?.conv ?? null)
-            setMenu(null)
-          }}
-        >
-          查看设备信息
-        </MenuItem>
-        <Divider />
-        <MenuItem
-          disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
-          onClick={() => {
-            const conv = menu?.conv
-            setMenu(null)
-            if (!conv) return
-            setAliasDraft(aliases[conv.id] ?? '')
-            setAliasTarget(conv)
-          }}
-        >
-          备注名
-        </MenuItem>
-        {!menuIsBle && (
+        {menuIsRelay ? (
           <>
+            <MenuItem
+              onClick={() => {
+                setPendingClear(menu?.conv ?? null)
+                setMenu(null)
+              }}
+            >
+              清空聊天记录
+            </MenuItem>
+            {!menuRelayPublic && (
+              <>
+                <Divider />
+                <MenuItem
+                  sx={{ color: 'error.main' }}
+                  onClick={() => {
+                    const conv = menu?.conv
+                    setMenu(null)
+                    if (conv) void leaveRoom(conv)
+                  }}
+                >
+                  退出房间
+                </MenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <MenuItem
+              disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
+              onClick={() => {
+                setPendingInfo(menu?.conv ?? null)
+                setMenu(null)
+              }}
+            >
+              查看设备信息
+            </MenuItem>
             <Divider />
             <MenuItem
               disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
@@ -808,87 +1003,104 @@ export default function Sidebar({
                 const conv = menu?.conv
                 setMenu(null)
                 if (!conv) return
-                const isBlocked = blocked.includes(conv.id)
-                patchSettings(
-                  { blocked: toggleMember(blocked, conv.id, !isBlocked) },
-                  isBlocked ? '已移出黑名单' : '已添加黑名单'
-                )
+                setAliasDraft(aliases[conv.id] ?? '')
+                setAliasTarget(conv)
               }}
             >
-              {menuShown && blocked.includes(menuShown.conv.id) ? '移出黑名单' : '添加黑名单'}
+              备注名
             </MenuItem>
-          </>
-        )}
-        <Divider />
-        <MenuItem
-          disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
-          sx={{ gap: 2, pr: 1 }}
-          // 开关项点文字、点开关都只切换状态，都不关菜单。
-          onClick={() => {
-            const conv = menu?.conv
-            if (!conv) return
-            patchSettings({ muted: toggleMember(muted, conv.id, !muted.includes(conv.id)) })
-          }}
-        >
-          <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
-          <Switch
-            size="small"
-            edge="end"
-            checked={!!menuShown && muted.includes(menuShown.conv.id)}
-            onClick={(event) => event.stopPropagation()}
-            onChange={(event) => {
-              const conv = menu?.conv
-              if (!conv) return
-              patchSettings({ muted: toggleMember(muted, conv.id, event.target.checked) })
-            }}
-          />
-        </MenuItem>
-        <Divider />
-        <MenuItem
-          disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
-          sx={{ gap: 2, pr: 1 }}
-          onClick={() => {
-            const conv = menu?.conv
-            if (!conv) return
-            patchSettings({
-              pinned: toggleMember(pinnedIds, conv.id, !pinnedIds.includes(conv.id))
-            })
-          }}
-        >
-          <Typography sx={{ flex: 1, fontSize: 14 }}>置顶会话</Typography>
-          <Switch
-            size="small"
-            edge="end"
-            checked={!!menuShown && pinnedIds.includes(menuShown.conv.id)}
-            onClick={(event) => event.stopPropagation()}
-            onChange={(event) => {
-              const conv = menu?.conv
-              if (!conv) return
-              patchSettings({ pinned: toggleMember(pinnedIds, conv.id, event.target.checked) })
-            }}
-          />
-        </MenuItem>
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            setPendingClear(menu?.conv ?? null)
-            setMenu(null)
-          }}
-        >
-          清空聊天记录
-        </MenuItem>
-        {!menuIsBle && (
-          <>
+            {!menuIsBle && (
+              <>
+                <Divider />
+                <MenuItem
+                  disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
+                  onClick={() => {
+                    const conv = menu?.conv
+                    setMenu(null)
+                    if (!conv) return
+                    const isBlocked = blocked.includes(conv.id)
+                    patchSettings(
+                      { blocked: toggleMember(blocked, conv.id, !isBlocked) },
+                      isBlocked ? '已移出黑名单' : '已添加黑名单'
+                    )
+                  }}
+                >
+                  {menuShown && blocked.includes(menuShown.conv.id) ? '移出黑名单' : '添加黑名单'}
+                </MenuItem>
+              </>
+            )}
             <Divider />
             <MenuItem
-              sx={{ color: 'error.main' }}
+              disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
+              sx={{ gap: 2, pr: 1 }}
+              // 开关项点文字、点开关都只切换状态，都不关菜单。
               onClick={() => {
-                setPendingDelete(menu?.conv ?? null)
+                const conv = menu?.conv
+                if (!conv) return
+                patchSettings({ muted: toggleMember(muted, conv.id, !muted.includes(conv.id)) })
+              }}
+            >
+              <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
+              <Switch
+                size="small"
+                edge="end"
+                checked={!!menuShown && muted.includes(menuShown.conv.id)}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => {
+                  const conv = menu?.conv
+                  if (!conv) return
+                  patchSettings({ muted: toggleMember(muted, conv.id, event.target.checked) })
+                }}
+              />
+            </MenuItem>
+            <Divider />
+            <MenuItem
+              disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
+              sx={{ gap: 2, pr: 1 }}
+              onClick={() => {
+                const conv = menu?.conv
+                if (!conv) return
+                patchSettings({
+                  pinned: toggleMember(pinnedIds, conv.id, !pinnedIds.includes(conv.id))
+                })
+              }}
+            >
+              <Typography sx={{ flex: 1, fontSize: 14 }}>置顶会话</Typography>
+              <Switch
+                size="small"
+                edge="end"
+                checked={!!menuShown && pinnedIds.includes(menuShown.conv.id)}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => {
+                  const conv = menu?.conv
+                  if (!conv) return
+                  patchSettings({ pinned: toggleMember(pinnedIds, conv.id, event.target.checked) })
+                }}
+              />
+            </MenuItem>
+            <Divider />
+            <MenuItem
+              onClick={() => {
+                setPendingClear(menu?.conv ?? null)
                 setMenu(null)
               }}
             >
-              删除此设备
+              清空聊天记录
             </MenuItem>
+            {!menuIsBle && (
+              <>
+                <Divider />
+                <MenuItem
+                  sx={{ color: 'error.main' }}
+                  onClick={() => {
+                    setPendingDelete(menu?.conv ?? null)
+                    setMenu(null)
+                  }}
+                >
+                  删除此设备
+                </MenuItem>
+              </>
+            )}
           </>
         )}
       </Menu>
@@ -992,6 +1204,59 @@ export default function Sidebar({
             }}
           >
             保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={roomOpen}
+        onClose={() => {
+          if (!roomBusy) setRoomOpen(false)
+        }}
+      >
+        <DialogTitle>创建或加入房间</DialogTitle>
+        <DialogContent sx={{ minWidth: 340 }}>
+          <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+            <TextField
+              fullWidth
+              label="房间名称"
+              value={roomName}
+              onChange={(event) => setRoomName(event.target.value)}
+              slotProps={{ htmlInput: { maxLength: 20 } }}
+            />
+            <Button
+              variant="contained"
+              disabled={roomBusy || roomName.trim() === ''}
+              onClick={() => void createRoom()}
+              sx={{ flexShrink: 0 }}
+            >
+              创建
+            </Button>
+          </Box>
+          <Divider sx={{ my: 2 }} />
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              fullWidth
+              label="房间号"
+              value={roomCode}
+              onChange={(event) => setRoomCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              slotProps={{
+                htmlInput: { inputMode: 'numeric', maxLength: 6 }
+              }}
+            />
+            <Button
+              variant="contained"
+              disabled={roomBusy || roomCode.length !== 6}
+              onClick={() => void joinRoom()}
+              sx={{ flexShrink: 0 }}
+            >
+              加入
+            </Button>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoomOpen(false)} disabled={roomBusy}>
+            关闭
           </Button>
         </DialogActions>
       </Dialog>

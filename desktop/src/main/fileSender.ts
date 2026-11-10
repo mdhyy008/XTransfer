@@ -2,9 +2,20 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import * as pty from 'node-pty'
+import { createRequire } from 'node:module'
+import type { IPty } from 'node-pty'
 import type { MessageStatus } from '../shared/types'
 import type { Db } from './db'
+
+// node-pty 在 Linux 上没有预编译包，缺失时退回普通子进程，不影响文件发送。
+const optionalRequire = createRequire(__filename)
+const ptyLib: typeof import('node-pty') | null = (() => {
+  try {
+    return optionalRequire('node-pty') as typeof import('node-pty')
+  } catch {
+    return null
+  }
+})()
 
 type JobFile = {
   messageId: string
@@ -18,7 +29,7 @@ type Job = {
   id: string
   peerId: string
   file: JobFile
-  term: pty.IPty | null
+  term: IPty | null
   child: ChildProcessWithoutNullStreams | null
   cancelled: boolean
   finished: boolean
@@ -224,29 +235,33 @@ export class FileSender {
       if (value !== undefined) env[key] = value
     }
 
-    try {
-      const term = pty.spawn(this.exe, args, {
-        name: 'xterm-256color',
-        cols: 500,
-        rows: 40,
-        cwd: this.cwd,
-        env
-      })
-      job.term = term
-      this.attachStream(
-        job,
-        (handler) => term.onData(handler),
-        (handler) => term.onExit(({ exitCode }) => handler(exitCode))
-      )
-    } catch {
-      const child = spawn(this.exe, args, { cwd: this.cwd, windowsHide: true })
-      job.child = child
-      this.attachStream(
-        job,
-        (handler) => child.stdout.on('data', (chunk: Buffer) => handler(chunk.toString('utf8'))),
-        (handler) => child.on('exit', (code) => handler(code ?? 1))
-      )
+    if (ptyLib) {
+      try {
+        const term = ptyLib.spawn(this.exe, args, {
+          name: 'xterm-256color',
+          cols: 500,
+          rows: 40,
+          cwd: this.cwd,
+          env
+        })
+        job.term = term
+        this.attachStream(
+          job,
+          (handler) => term.onData(handler),
+          (handler) => term.onExit(({ exitCode }) => handler(exitCode))
+        )
+        return
+      } catch {
+        job.term = null
+      }
     }
+    const child = spawn(this.exe, args, { cwd: this.cwd, windowsHide: true })
+    job.child = child
+    this.attachStream(
+      job,
+      (handler) => child.stdout.on('data', (chunk: Buffer) => handler(chunk.toString('utf8'))),
+      (handler) => child.on('exit', (code) => handler(code ?? 1))
+    )
   }
 
   private attachStream(

@@ -232,6 +232,13 @@ export default function SettingsDialog({
   const [feedbackQr, setFeedbackQr] = useState('')
   const [chatChecked, setChatChecked] = useState<string[]>([])
   const [bleBusy, setBleBusy] = useState(false)
+  const [relayOpen, setRelayOpen] = useState(false)
+  const [relayDraft, setRelayDraft] = useState('')
+  const [relayTesting, setRelayTesting] = useState(false)
+  const [relayTestMsg, setRelayTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [relayPendingConnect, setRelayPendingConnect] = useState(false)
+  const [relayPendingAddress, setRelayPendingAddress] = useState('')
+  const [relayError, setRelayError] = useState<{ title: string; text: string } | null>(null)
 
   useEffect(() => {
     if (!feedbackOpen) return
@@ -283,6 +290,21 @@ export default function SettingsDialog({
       .then((res) => setCacheBytes(res.total))
       .catch(() => {})
   }, [open, config?.deviceName])
+
+  useEffect(() => {
+    if (!relayPendingConnect) return
+    const state = snapshot?.relay
+    if (!state) return
+    if (state.address !== relayPendingAddress) return
+    if (state.connected) {
+      setRelayPendingConnect(false)
+      return
+    }
+    if (!state.connecting && state.error) {
+      setRelayPendingConnect(false)
+      setRelayError({ title: '连接失败', text: state.error })
+    }
+  }, [relayPendingConnect, relayPendingAddress, snapshot?.relay])
 
   const run = async (
     key: string,
@@ -438,6 +460,43 @@ export default function SettingsDialog({
               />
             </>
           )}
+          <GroupDivider />
+          <Row
+            icon={<PublicRounded fontSize="small" />}
+            title="中继服务器"
+            description={snapshot?.relay.connected ? '已连接' : '未连接'}
+            trailing={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="secondary"
+                  startIcon={<DeleteSweepRounded />}
+                  disabled={snapshot?.relay.connected !== true}
+                  onClick={() => {
+                    setRelayDraft('')
+                    patch({ relayUrl: '' })
+                    notify('已清除')
+                  }}
+                >
+                  清除
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="secondary"
+                  startIcon={<LinkRounded />}
+                  onClick={() => {
+                    setRelayDraft(settings?.relayUrl ?? '')
+                    setRelayTestMsg(null)
+                    setRelayOpen(true)
+                  }}
+                >
+                  连接
+                </Button>
+              </Box>
+            }
+          />
         </Section>
 
         <Section title="外观">
@@ -723,6 +782,92 @@ export default function SettingsDialog({
           </Typography>
         )}
       </DialogContent>
+
+      <Dialog open={relayOpen} onClose={() => setRelayOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>中继服务器</DialogTitle>
+        <DialogContent sx={{ minWidth: 380 }}>
+          <TextField
+            autoFocus
+            fullWidth
+            value={relayDraft}
+            onChange={(event) => {
+              setRelayDraft(event.target.value)
+              setRelayTestMsg(null)
+            }}
+            label="服务器地址"
+            sx={{ mt: 1 }}
+          />
+          {relayTestMsg && (
+            <Typography
+              variant="body2"
+              sx={{ mt: 1.5, color: relayTestMsg.ok ? 'success.main' : 'error.main' }}
+            >
+              {relayTestMsg.text}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            disabled={relayTesting || !relayDraft.trim()}
+            onClick={() => {
+              setRelayTesting(true)
+              setRelayTestMsg(null)
+              window.xt
+                .relayTest(relayDraft.trim())
+                .then((result) => {
+                  if (result.ok) {
+                    setRelayTestMsg({ ok: true, text: '测试成功' })
+                  } else {
+                    setRelayTestMsg(null)
+                    setRelayError({ title: '测试失败', text: result.error || '地址无效' })
+                  }
+                })
+                .catch(() => {
+                  setRelayTestMsg(null)
+                  setRelayError({ title: '测试失败', text: '地址无效' })
+                })
+                .finally(() => setRelayTesting(false))
+            }}
+          >
+            {relayTesting ? '测试中' : '测试'}
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!relayDraft.trim()}
+            onClick={() => {
+              const next = relayDraft.trim()
+              patch({ relayUrl: next })
+              setRelayPendingAddress(next.replace(/\/+$/, ''))
+              setRelayPendingConnect(true)
+              setRelayOpen(false)
+              notify('已保存')
+            }}
+          >
+            保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={relayError !== null} onClose={() => setRelayError(null)}>
+        <DialogTitle sx={{ fontSize: 18 }}>{relayError?.title}</DialogTitle>
+        <DialogContent sx={{ minWidth: 340 }}>
+          <Typography
+            variant="body2"
+            data-selectable="true"
+            sx={{
+              userSelect: 'text',
+              whiteSpace: 'pre-wrap',
+              cursor: 'text',
+              wordBreak: 'break-all'
+            }}
+          >
+            {relayError?.text}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRelayError(null)}>确定</Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={blockedOpen} onClose={() => setBlockedOpen(false)}>
         <DialogTitle>设备黑名单</DialogTitle>

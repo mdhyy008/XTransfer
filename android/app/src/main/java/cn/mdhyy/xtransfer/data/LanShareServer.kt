@@ -37,7 +37,8 @@ data class ShareStatus(
  */
 class LanShareServer(
     private val app: Application,
-    private val repo: Repository
+    private val repo: Repository,
+    private val hotspot: LocalHotspot
 ) {
     private val _status = MutableStateFlow(ShareStatus())
     val status: StateFlow<ShareStatus> = _status.asStateFlow()
@@ -48,7 +49,8 @@ class LanShareServer(
     private var files: List<ShareEntry> = emptyList()
 
     suspend fun start(items: List<BucketItem>): ShareStatus = withContext(Dispatchers.IO) {
-        val host = repo.lan.value.info?.cidr?.substringBefore('/')
+        val host = hotspot.linkAddress()?.first
+            ?: repo.lan.value.info?.cidr?.substringBefore('/')
         if (host.isNullOrBlank()) {
             return@withContext publish(ShareStatus(error = "未连接到局域网"))
         }

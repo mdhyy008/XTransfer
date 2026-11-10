@@ -28,8 +28,17 @@ export class XlanService {
     this.recvDir = recvDir
   }
 
+  // Windows 用 xlan.exe，macOS / Linux 用按平台和架构区分的无后缀二进制。
+  binName(): string {
+    if (process.platform === 'win32') return 'xlan.exe'
+    if (process.platform === 'darwin') {
+      return process.arch === 'arm64' ? 'xlan-darwin-arm64' : 'xlan-darwin-x64'
+    }
+    return process.arch === 'arm64' ? 'xlan-linux-arm64' : 'xlan-linux-x64'
+  }
+
   get exe(): string {
-    return path.join(this.dir, 'xlan.exe')
+    return path.join(this.dir, this.binName())
   }
 
   setRecvDir(dir: string): void {
@@ -118,7 +127,7 @@ export class XlanService {
   }
 
   async start(): Promise<ProbeResult> {
-    if (!fs.existsSync(this.exe)) throw new Error('找不到 xlan.exe')
+    if (!fs.existsSync(this.exe)) throw new Error(`找不到 ${this.binName()}`)
     await this.ensureDeviceName()
     await this.ensureRecvDir()
 

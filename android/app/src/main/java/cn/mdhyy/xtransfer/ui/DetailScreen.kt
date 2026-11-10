@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -33,10 +34,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
@@ -49,18 +53,24 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -109,6 +119,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -128,6 +139,9 @@ import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.PUBLIC_CONVERSATION_ID
 import cn.mdhyy.xtransfer.data.Peer
 import cn.mdhyy.xtransfer.data.PUBLIC_CONVERSATION_NAME
+import cn.mdhyy.xtransfer.data.RELAY_CONVERSATION_PREFIX
+import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_ID
+import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_NAME
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.ServiceStatus
 import kotlinx.coroutines.CoroutineScope
@@ -176,6 +190,18 @@ fun DetailScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val isPublic = convId == PUBLIC_CONVERSATION_ID
     val isBle = convId.startsWith(BLE_CONVERSATION_PREFIX)
+    val isRelay = convId.startsWith(RELAY_CONVERSATION_PREFIX)
+    val relayRoomId = if (isRelay) convId.removePrefix(RELAY_CONVERSATION_PREFIX) else ""
+    val relayManager = (context.applicationContext as XlanApp).relay
+    val relayState by relayManager.state.collectAsStateWithLifecycle()
+    val relayRoom = if (isRelay) relayState.rooms.firstOrNull { it.id == relayRoomId } else null
+    val relayPublic = isRelay && relayRoomId == RELAY_PUBLIC_ROOM_ID
+    val relayConnected = isRelay && relayState.connected
+    val relayConnecting = isRelay && relayState.connecting
+    val relayIsCreator = relayRoom != null &&
+        relayRoom.creator.isNotBlank() &&
+        relayRoom.creator == relayState.deviceId
+    val relayMembers = if (isRelay) relayState.members[relayRoomId].orEmpty() else emptyList()
     val bleManager = (context.applicationContext as XlanApp).ble
     val bleState by bleManager.state.collectAsStateWithLifecycle()
     val webChat = (context.applicationContext as XlanApp).webChat
@@ -188,12 +214,18 @@ fun DetailScreen(
     val bleConnected = bleState.devices.firstOrNull { it.id == blePeerId }?.connected == true
     val bleConnecting = bleState.connecting == blePeerId
     val storedName = conv?.name?.takeIf { it.isNotBlank() && it != convId && it != blePeerId }
-    val titleName = if (isBle) {
-        storedName ?: bleDeviceName ?: blePeerId
-    } else {
-        conv?.name ?: if (isPublic) PUBLIC_CONVERSATION_NAME else convId
+    val titleName = when {
+        isBle -> storedName ?: bleDeviceName ?: blePeerId
+        isRelay -> conv?.name?.takeIf { it.isNotBlank() && it != convId }
+            ?: relayRoom?.name?.takeIf { it.isNotBlank() }
+            ?: if (relayPublic) RELAY_PUBLIC_ROOM_NAME else "聊天室"
+        else -> conv?.name ?: if (isPublic) PUBLIC_CONVERSATION_NAME else convId
     }
-    val canSend = if (isBle) bleConnected else service.running
+    val canSend = when {
+        isRelay -> relayConnected
+        isBle -> bleConnected
+        else -> service.running
+    }
     val bucketParts = remember(bucketItems) {
         val counts = HashMap<String, Int>()
         for (item in bucketItems) {
@@ -234,6 +266,7 @@ fun DetailScreen(
     LaunchedEffect(convId) {
         repo.ensureConversation(convId, titleName)
         if (isPublic) repo.syncPublicHistory()
+        if (isRelay) repo.requestRelayMembers(relayRoomId)
         if (isBle && !bleManager.isConnected(blePeerId)) bleManager.connect(blePeerId)
         searchOpen = false
         searchQuery = ""
@@ -293,6 +326,12 @@ fun DetailScreen(
     var confirmClear by remember { mutableStateOf(false) }
     var infoTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var saveTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var viewConfirm by remember { mutableStateOf<MessageEntity?>(null) }
+    var errorTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var membersOpen by remember { mutableStateOf(false) }
+    var renameOpen by remember { mutableStateOf(false) }
+    var renameDraft by remember { mutableStateOf("") }
+    var leaveOpen by remember { mutableStateOf(false) }
 
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("*/*")
@@ -339,12 +378,11 @@ fun DetailScreen(
         }
     }
 
-    val openMessage: (MessageEntity) -> Unit = { message ->
+    val openLocalFile: (MessageEntity) -> Unit = { message ->
         val path = message.localPath
         val name = message.fileName ?: path?.let { File(it).name }.orEmpty()
         when {
-            path.isNullOrBlank() -> context.showError("文件不存在")
-            message.status != "done" && message.status != "duplicate" -> Unit
+            path.isNullOrBlank() -> Unit
             message.kind == "folder" -> openFileExternally(context, path, name, folder = true)
             quickPreview && extensionOf(name) == "apk" -> apkTarget = message
             quickPreview && previewKindOf(name) in setOf(
@@ -355,6 +393,31 @@ fun DetailScreen(
             quickPreview && previewKindOf(name) == PreviewKind.TEXT -> previewTarget = message
             quickPreview -> context.showError("不支持快速预览")
             else -> openFileExternally(context, path, name)
+        }
+    }
+
+    val cacheAndOpen: (MessageEntity) -> Unit = { message ->
+        scope.launch {
+            runCatching { repo.relayCacheFile(message) }
+                .onSuccess { file ->
+                    openLocalFile(message.copy(localPath = file.absolutePath, status = "done"))
+                }
+                .onFailure { context.showError(it.message ?: "查看失败") }
+        }
+    }
+
+    val openMessage: (MessageEntity) -> Unit = { message ->
+        val path = message.localPath
+        val name = message.fileName ?: path?.let { File(it).name }.orEmpty()
+        when {
+            !path.isNullOrBlank() ->
+                if (message.status == "done" || message.status == "duplicate") {
+                    openLocalFile(message)
+                }
+            message.channel == "relay" && !message.relayFileId.isNullOrBlank() ->
+                if (needsViewConfirm(name, message.fileSize)) viewConfirm = message
+                else cacheAndOpen(message)
+            else -> context.showError("文件不存在")
         }
     }
 
@@ -377,8 +440,27 @@ fun DetailScreen(
                 return
             }
         }
+        if (isRelay) {
+            val max = relayState.maxFileSize
+            val blocked = items.firstOrNull {
+                it.kind == "folder" || (max > 0 && it.size > max)
+            }
+            if (blocked != null) {
+                context.showError(
+                    if (blocked.kind == "folder") "公网聊天室不支持发送文件夹"
+                    else "单个文件不能超过 ${max / (1024 * 1024)} MB"
+                )
+                return
+            }
+        }
         if (!repo.sendBucket(convId, items)) {
-            context.showError(if (isBle) "蓝牙未连接" else "设备不在线")
+            context.showError(
+                when {
+                    isRelay -> "公网未连接"
+                    isBle -> "蓝牙未连接"
+                    else -> "设备不在线"
+                }
+            )
         }
     }
 
@@ -474,8 +556,12 @@ fun DetailScreen(
                     overflow = TextOverflow.Ellipsis
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val online = if (isBle) bleConnected else conv?.online == true
-                    if (isBle && bleConnecting) {
+                    val online = when {
+                        isRelay -> relayConnected
+                        isBle -> bleConnected
+                        else -> conv?.online == true
+                    }
+                    if ((isBle && bleConnecting) || (isRelay && relayConnecting)) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(8.dp),
                             strokeWidth = 1.5.dp,
@@ -496,6 +582,11 @@ fun DetailScreen(
                     Text(
                         text = when {
                             isPublic -> if (lanOnline) "已连接" else "未连接"
+                            isRelay -> when {
+                                relayConnected -> "已连接"
+                                relayConnecting -> "正在连接"
+                                else -> "未连接"
+                            }
                             isBle -> when {
                                 bleConnected -> "已连接"
                                 bleConnecting -> "正在连接"
@@ -508,7 +599,11 @@ fun DetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.width(5.dp))
-                    val active = if (isPublic) lanOnline else online
+                    val active = when {
+                        isRelay -> relayConnected
+                        isPublic -> lanOnline
+                        else -> online
+                    }
                     val reconnect = isBle && !bleConnected && !bleConnecting
                     Row(
                         modifier = Modifier
@@ -533,7 +628,11 @@ fun DetailScreen(
                     ) {
                         Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = if (isBle) Icons.Rounded.Bluetooth else Icons.Rounded.Wifi,
+                                imageVector = when {
+                                    isRelay -> Icons.Rounded.Public
+                                    isBle -> Icons.Rounded.Bluetooth
+                                    else -> Icons.Rounded.Wifi
+                                },
                                 contentDescription = null,
                                 tint = if (active) Color.White
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -577,12 +676,12 @@ fun DetailScreen(
                     }
                 }
             }
-            if (!isBle && !isPublic) {
+            if (!isBle && !isPublic && !isRelay) {
                 IconButton(onClick = onOpenBucket) {
                     Icon(Icons.Rounded.Inventory2, contentDescription = "暂存桶")
                 }
             }
-            if (isPublic || isBle || peer != null) {
+            if (isPublic || isBle || isRelay || peer != null) {
                 val target = peer
                 Box {
                     var menuOpen by remember { mutableStateOf(false) }
@@ -593,7 +692,74 @@ fun DetailScreen(
                         expanded = menuOpen,
                         onDismissRequest = { menuOpen = false }
                     ) {
-                        if (isPublic) {
+                        if (isRelay && relayPublic) {
+                            DropdownMenuItem(
+                                text = { Text("允许通知") },
+                                // 开关项点文字、点开关都只切换状态，都不关菜单。
+                                onClick = { onSetPublicNotify(!publicNotify) },
+                                trailingIcon = {
+                                    Switch(
+                                        checked = publicNotify,
+                                        onCheckedChange = { onSetPublicNotify(it) }
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("清空聊天记录") },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmClear = true
+                                }
+                            )
+                        } else if (isRelay) {
+                            DropdownMenuItem(
+                                text = { Text("免打扰") },
+                                // 开关项点文字、点开关都只切换状态，都不关菜单。
+                                onClick = { onSetMuted(!muted) },
+                                trailingIcon = {
+                                    Switch(
+                                        checked = muted,
+                                        onCheckedChange = { onSetMuted(it) }
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("群成员") },
+                                onClick = {
+                                    menuOpen = false
+                                    membersOpen = true
+                                    scope.launch {
+                                        runCatching { relayManager.requestMembers(relayRoomId) }
+                                    }
+                                }
+                            )
+                            if (relayIsCreator) {
+                                DropdownMenuItem(
+                                    text = { Text("修改群名") },
+                                    onClick = {
+                                        menuOpen = false
+                                        renameDraft = relayRoom?.name.orEmpty()
+                                        renameOpen = true
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("清空聊天记录") },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmClear = true
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("退出房间") },
+                                onClick = {
+                                    menuOpen = false
+                                    leaveOpen = true
+                                }
+                            )
+                        } else if (isPublic) {
                             DropdownMenuItem(
                                 text = { Text("允许通知") },
                                 // 开关项点文字、点开关都只切换状态，都不关菜单。
@@ -729,7 +895,7 @@ fun DetailScreen(
         )
 
         LanOfflineBox(
-            offline = offline && !isBle,
+            offline = offline && !isBle && !isRelay,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -777,7 +943,12 @@ fun DetailScreen(
                     }
                     MessageRow(
                         message = message,
-                        showName = isPublic,
+                        showName = isPublic || isRelay,
+                        canRecall = isRelay && !relayPublic &&
+                            message.status == "done" &&
+                            !message.recalled &&
+                            (message.direction == "out" || relayIsCreator),
+                        onRecall = { repo.relayRecall(relayRoomId, message.id) },
                         onDecide = { id, action ->
                             scope.launch {
                                 runCatching { repo.decide(id, action) }
@@ -808,6 +979,14 @@ fun DetailScreen(
                         onCopyPath = copyPath,
                         onShowInfo = { infoTarget = it },
                         onSaveAs = saveAs,
+                        onDownload = { target ->
+                            scope.launch {
+                                runCatching { repo.relaySaveFile(target) }
+                                    .onSuccess { context.toast("已保存") }
+                                    .onFailure { context.showError(it.message ?: "下载失败") }
+                            }
+                        },
+                        onShowError = { errorTarget = it },
                         onDelete = { id ->
                             scope.launch {
                                 runCatching { repo.deleteMessage(id) }
@@ -851,7 +1030,7 @@ fun DetailScreen(
                     .height(1.dp)
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             )
-            if (!isPublic && !isBle && bucketParts.isNotEmpty()) {
+            if (!isPublic && !isBle && !isRelay && bucketParts.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -926,7 +1105,13 @@ fun DetailScreen(
                             true
                         },
                     placeholder = {
-                        Text(if (isBle && !bleConnected) "蓝牙未连接" else "输入消息")
+                        Text(
+                            when {
+                                isRelay && !relayConnected -> "公网未连接"
+                                isBle && !bleConnected -> "蓝牙未连接"
+                                else -> "输入消息"
+                            }
+                        )
                     },
                     minLines = 1,
                     maxLines = 3,
@@ -979,7 +1164,7 @@ fun DetailScreen(
                     attachOpen = false
                     filePicker.launch(arrayOf("*/*"))
                 }
-                if (!isBle) {
+                if (!isBle && !isRelay) {
                     AttachOption(Icons.Rounded.Folder, "文件夹") {
                         attachOpen = false
                         pickFolder()
@@ -1161,6 +1346,124 @@ fun DetailScreen(
         )
     }
 
+    if (membersOpen) {
+        AlertDialog(
+            onDismissRequest = { membersOpen = false },
+            title = { Text("群成员") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (relayMembers.isEmpty()) {
+                        Text(
+                            text = "暂无成员",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    relayMembers.forEach { member ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = member.name.ifBlank { member.deviceId },
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (member.deviceId == relayState.deviceId) {
+                                Text(
+                                    text = "（我）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (member.creator) {
+                                Text(
+                                    text = "（群主）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (relayIsCreator && member.deviceId != relayState.deviceId) {
+                                TextButton(
+                                    onClick = {
+                                        repo.relayKick(relayRoomId, member.deviceId)
+                                        scope.launch {
+                                            runCatching {
+                                                relayManager.requestMembers(relayRoomId)
+                                            }
+                                        }
+                                    }
+                                ) { Text("移出") }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { membersOpen = false }) { Text("关闭") }
+            }
+        )
+    }
+
+    if (renameOpen) {
+        AlertDialog(
+            onDismissRequest = { renameOpen = false },
+            title = { Text("修改群名") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { if (it.length <= 30) renameDraft = it },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = renameDraft.trim()
+                        if (name.isNotEmpty()) {
+                            repo.relayRename(relayRoomId, name)
+                            context.toast("已保存")
+                        }
+                        renameOpen = false
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (leaveOpen) {
+        AlertDialog(
+            onDismissRequest = { leaveOpen = false },
+            title = { Text("退出房间") },
+            text = { Text("确定要退出「$titleName」吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        leaveOpen = false
+                        repo.leaveRelayRoom(relayRoomId)
+                        context.toast("已退出房间")
+                        onBack()
+                    }
+                ) { Text("退出") }
+            },
+            dismissButton = {
+                TextButton(onClick = { leaveOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (aliasOpen) {
         AlertDialog(
             onDismissRequest = { aliasOpen = false },
@@ -1183,6 +1486,63 @@ fun DetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { aliasOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
+    val pendingView = viewConfirm
+    if (pendingView != null) {
+        AlertDialog(
+            onDismissRequest = { viewConfirm = null },
+            title = { Text("是否查看") },
+            text = {
+                Text(
+                    text = pendingView.fileName ?: "文件",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = pendingView
+                        viewConfirm = null
+                        cacheAndOpen(target)
+                    }
+                ) { Text("查看") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewConfirm = null }) { Text("取消") }
+            }
+        )
+    }
+
+    val failing = errorTarget
+    if (failing != null) {
+        AlertDialog(
+            onDismissRequest = { errorTarget = null },
+            title = { Text("发送失败") },
+            text = {
+                SelectionContainer {
+                    Text(
+                        text = failing.errorCode?.takeIf { it.isNotBlank() } ?: "发送失败",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        errorTarget = null
+                        scope.launch {
+                            runCatching { repo.retrySend(failing) }
+                                .onFailure { context.showError(it.message ?: "重试失败") }
+                        }
+                    }
+                ) { Text("重试") }
+            },
+            dismissButton = {
+                TextButton(onClick = { errorTarget = null }) { Text("关闭") }
             }
         )
     }
@@ -1290,6 +1650,8 @@ private fun AttachOption(icon: ImageVector, label: String, onClick: () -> Unit) 
 private fun MessageRow(
     message: MessageEntity,
     showName: Boolean,
+    canRecall: Boolean,
+    onRecall: () -> Unit,
     onDecide: (String, String) -> Unit,
     onAcceptAll: (() -> Unit)?,
     onRetry: (MessageEntity) -> Unit,
@@ -1298,12 +1660,30 @@ private fun MessageRow(
     onCopyPath: (MessageEntity) -> Unit,
     onShowInfo: (MessageEntity) -> Unit,
     onSaveAs: (MessageEntity) -> Unit,
+    onDownload: (MessageEntity) -> Unit,
+    onShowError: (MessageEntity) -> Unit,
     onDelete: (String) -> Unit,
     onDeleteFile: (MessageEntity) -> Unit
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val mine = message.direction == "out"
+    if (message.recalled) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = (if (mine) "" else "${message.fromName ?: message.fromId} ") +
+                    "撤回了一条消息",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
     val pending = message.status == "pending" && message.kind != "text" && !mine
     val missing = message.kind != "text" && isMissingFile(message)
     var menuOpen by remember(message.id) { mutableStateOf(false) }
@@ -1317,6 +1697,8 @@ private fun MessageRow(
             message = message,
             mine = mine,
             missing = missing,
+            canRecall = canRecall,
+            onRecall = onRecall,
             context = context,
             onClose = { menuOpen = false },
             onCancel = onCancel,
@@ -1324,6 +1706,7 @@ private fun MessageRow(
             onCopyPath = onCopyPath,
             onShowInfo = onShowInfo,
             onSaveAs = onSaveAs,
+            onDownload = onDownload,
             onDelete = {
                 menuOpen = false
                 confirmDelete = true
@@ -1401,7 +1784,7 @@ private fun MessageRow(
                         } else {
                             { onOpen(message) }
                         },
-                        onRetry = { onRetry(message) },
+                        onShowError = { onShowError(message) },
                         onCancel = {
                             if (mine) onCancel(message.id) else onDecide(message.id, "cancel")
                         }
@@ -1449,6 +1832,17 @@ private fun MessageRow(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(start = 4.dp)
                 ) {
+                    IconButton(
+                        onClick = { onShowError(message) },
+                        modifier = Modifier.size(20.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.ErrorOutline,
+                            contentDescription = "发送失败",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                     Text(
                         text = "发送失败",
                         style = MaterialTheme.typography.labelSmall,
@@ -1544,6 +1938,8 @@ private fun MessageMenuItems(
     message: MessageEntity,
     mine: Boolean,
     missing: Boolean,
+    canRecall: Boolean,
+    onRecall: () -> Unit,
     context: Context,
     onClose: () -> Unit,
     onCancel: (String) -> Unit,
@@ -1551,10 +1947,14 @@ private fun MessageMenuItems(
     onCopyPath: (MessageEntity) -> Unit,
     onShowInfo: (MessageEntity) -> Unit,
     onSaveAs: (MessageEntity) -> Unit,
+    onDownload: (MessageEntity) -> Unit,
     onDelete: () -> Unit
 ) {
     val body = message.body
     val items = buildList<MessageMenuAction> {
+        if (canRecall) {
+            add(MessageMenuAction("撤回", Icons.Rounded.Undo, onRecall))
+        }
         if (message.kind == "text" && !body.isNullOrEmpty()) {
             add(
                 MessageMenuAction("复制文本", Icons.Rounded.ContentCopy) {
@@ -1567,6 +1967,14 @@ private fun MessageMenuItems(
             )
         }
         if (message.kind != "text") {
+            val relayPublicFile = message.channel == "relay" &&
+                message.conversationId == "${RELAY_CONVERSATION_PREFIX}${RELAY_PUBLIC_ROOM_ID}" &&
+                message.direction == "in" &&
+                message.kind == "file" &&
+                !message.relayFileId.isNullOrBlank()
+            if (relayPublicFile && isRelayCachePath(context, message.localPath)) {
+                add(MessageMenuAction("下载", Icons.Rounded.Download) { onDownload(message) })
+            }
             if (!message.localPath.isNullOrBlank()) {
                 add(MessageMenuAction("复制文件路径", Icons.Rounded.ContentCopy) { onCopyPath(message) })
             }
@@ -1585,7 +1993,7 @@ private fun MessageMenuItems(
                 })
             }
         }
-        if (mine && message.kind != "text" &&
+        if (mine && message.kind != "text" && message.channel != "relay" &&
             (message.status == "queued" || message.status == "sending" ||
                 message.status == "active" || message.status == "accepted")
         ) {
@@ -1635,6 +2043,22 @@ private class MessageMenuAction(
     val action: () -> Unit
 )
 
+private val VIEW_CONFIRM_EXEC_EXTS = setOf(
+    "apk", "aab", "apks", "xapk", "exe", "msi", "bat", "cmd", "com", "scr", "ps1"
+)
+
+private fun needsViewConfirm(name: String, size: Long?): Boolean {
+    val ext = extensionOf(name)
+    if (ext in VIEW_CONFIRM_EXEC_EXTS) return true
+    return isImageName(name) && (size ?: 0) > 2L * 1024 * 1024
+}
+
+private fun isRelayCachePath(context: Context, path: String?): Boolean {
+    if (path.isNullOrBlank()) return true
+    val dir = File(context.filesDir, "relay").absolutePath + File.separator
+    return path.startsWith(dir)
+}
+
 private fun isMissingFile(message: MessageEntity): Boolean {
     val path = message.localPath ?: return false
     if (path.startsWith("content://")) return false
@@ -1648,7 +2072,7 @@ private fun FileCard(
     missing: Boolean,
     onLongPress: ((DpOffset) -> Unit)?,
     onTap: (() -> Unit)?,
-    onRetry: () -> Unit,
+    onShowError: () -> Unit,
     onCancel: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1658,7 +2082,7 @@ private fun FileCard(
         message.status == "rejected"
     val total = if (message.total > 0) message.total else (message.fileSize ?: 0)
     val percent = if (active && total > 0) min(100, ((message.received * 100.0) / total).roundToInt()) else 0
-    val canCancel = !missing && (
+    val canCancel = message.channel != "relay" && !missing && (
         if (mine) message.status == "queued" || message.status == "sending" || active else active
         )
     val longPress = onLongPress
@@ -1725,9 +2149,13 @@ private fun FileCard(
                     IconButton(onClick = onCancel) {
                         Icon(Icons.Rounded.StopCircle, contentDescription = "取消", modifier = Modifier.size(20.dp))
                     }
-                } else if (mine && !missing && message.status == "failed" && message.localPath != null) {
-                    IconButton(onClick = onRetry) {
-                        Icon(Icons.Rounded.Replay, contentDescription = "重试", modifier = Modifier.size(20.dp))
+                } else if (mine && message.status == "failed") {
+                    IconButton(onClick = onShowError) {
+                        Icon(
+                            Icons.Rounded.ErrorOutline,
+                            contentDescription = "发送失败",
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,19 +43,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -67,6 +72,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -81,6 +87,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +102,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -111,6 +119,9 @@ import cn.mdhyy.xtransfer.data.BleManager
 import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.LanInfo
 import cn.mdhyy.xtransfer.data.LocalHotspot
+import cn.mdhyy.xtransfer.data.RELAY_CONVERSATION_PREFIX
+import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_ID
+import cn.mdhyy.xtransfer.data.RelayManager
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.WifiDirectDevice
 import cn.mdhyy.xtransfer.data.WifiDirectManager
@@ -154,11 +165,13 @@ fun ListScreen(
     hotspot: LocalHotspot,
     wifiDirect: WifiDirectManager,
     ble: BleManager,
+    relay: RelayManager,
     onOpenHotspot: () -> Unit,
     onOpenWifiDirect: () -> Unit
 ) {
     val direct by wifiDirect.state.collectAsStateWithLifecycle()
     val bleState by ble.state.collectAsStateWithLifecycle()
+    val relayState by relay.state.collectAsStateWithLifecycle()
     val hotspotState by hotspot.state.collectAsStateWithLifecycle()
     val hotspotSupported = hotspot.supported
     val activeLinks = buildList {
@@ -166,7 +179,19 @@ fun ListScreen(
         if (direct.connected) add(Icons.Rounded.Devices)
         if (bleState.on) add(Icons.Rounded.Bluetooth)
     }
+    // 热点网卡不在 ConnectivityManager 的列表里，单独取一次地址做展示。
+    val hotspotLink = remember(hotspotState) {
+        if (hotspotState is HotspotState.Running) hotspot.linkAddress() else null
+    }
     var connectionsOpen by remember { mutableStateOf(false) }
+    var helpOpen by remember { mutableStateOf(false) }
+    // 用过任意一种连接方式后本会话不再提示，重启应用后重新出现。
+    var solutionUsed by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(hotspotState, direct.connected, bleState.on) {
+        if (hotspotState is HotspotState.Running || direct.connected || bleState.on) {
+            solutionUsed = true
+        }
+    }
     var scanning by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf("") }
     var flashText by remember { mutableStateOf("") }
@@ -177,6 +202,10 @@ fun ListScreen(
     var infoTarget by remember { mutableStateOf<DeviceInfoTarget?>(null) }
     var aliasTarget by remember { mutableStateOf<ConversationUi?>(null) }
     var aliasDraft by remember { mutableStateOf("") }
+    var roomOpen by remember { mutableStateOf(false) }
+    var roomName by remember { mutableStateOf("") }
+    var roomCode by remember { mutableStateOf("") }
+    var roomBusy by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val bleEnable = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -254,7 +283,17 @@ fun ListScreen(
         bleState.devices.none { it.id == peerId }
     }
     val devices = conversations.filter {
-        it.id != PUBLIC_CONVERSATION_ID && !it.id.startsWith(BLE_CONVERSATION_PREFIX)
+        it.id != PUBLIC_CONVERSATION_ID &&
+            !it.id.startsWith(BLE_CONVERSATION_PREFIX) &&
+            !it.id.startsWith(RELAY_CONVERSATION_PREFIX)
+    }
+    val relayRows = remember(conversations, relayState.rooms) {
+        val order = relayState.rooms
+            .mapIndexed { index, room -> RELAY_CONVERSATION_PREFIX + room.id to index }
+            .toMap()
+        conversations
+            .filter { it.id.startsWith(RELAY_CONVERSATION_PREFIX) }
+            .sortedBy { order[it.id] ?: Int.MAX_VALUE }
     }
     val pinnedDevices = devices
         .filter { it.id in pinned }
@@ -296,6 +335,11 @@ fun ListScreen(
             compareByDescending<ConversationUi> { it.online }
                 .thenByDescending { it.lastMessageAt }
         )
+    val relayStatus = when {
+        relayState.connected -> "已连接"
+        relayState.connecting -> "正在连接"
+        else -> "未连接"
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
@@ -318,7 +362,9 @@ fun ListScreen(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = lanInfo?.let { "${it.name} ${it.cidr}" } ?: "未连接到局域网",
+                        text = lanInfo?.let { "${it.name} ${it.cidr}" }
+                            ?: hotspotLink?.let { "热点 ${it.first}/${it.second}" }
+                            ?: "未连接到局域网",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -388,12 +434,46 @@ fun ListScreen(
             )
         }
 
-        LanOfflineBox(
-            offline = lanOffline,
+        Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
         ) {
+        if (lanOffline && !solutionUsed) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.WifiOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "当前设备未连接到局域网",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "查看解决方法",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { helpOpen = true }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
         PullToRefreshBox(
             isRefreshing = scanning,
             onRefresh = {
@@ -412,7 +492,9 @@ fun ListScreen(
                     }
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -659,9 +741,59 @@ fun ListScreen(
                     }
                 )
             }
+            if (relayState.connected || relayRows.isNotEmpty()) {
+                item(key = "relay-label") {
+                    SectionLabelWithAction(text = "公网") {
+                        IconButton(
+                            onClick = { roomOpen = true },
+                            enabled = relayState.connected
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "创建或加入房间",
+                                tint = if (relayState.connected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(1.dp))
+                }
+                items(relayRows, key = { "relay-${it.id}" }) { conv ->
+                    val isRelayPublic = conv.id == RELAY_CONVERSATION_PREFIX + RELAY_PUBLIC_ROOM_ID
+                    ConversationRow(
+                        conv = conv.copy(online = relayState.connected),
+                        preview = previewOf(latest[conv.id]).ifBlank { relayStatus },
+                        isPublic = false,
+                        blocked = false,
+                        muted = conv.id in muted,
+                        pinned = false,
+                        isRelay = true,
+                        isRelayPublic = isRelayPublic,
+                        onClick = { onOpenConv(conv.id) },
+                        onToggleBlock = {},
+                        onToggleMute = {
+                            scope.launch { repo.setMuted(conv.id, conv.id !in muted) }
+                        },
+                        onTogglePin = {},
+                        onSetAlias = {},
+                        onClear = { pendingClear = conv },
+                        onDelete = {},
+                        onShowInfo = {},
+                        onLeaveRoom = {
+                            scope.launch {
+                                repo.leaveRelayRoom(conv.id.removePrefix(RELAY_CONVERSATION_PREFIX))
+                                context.toast("已退出房间")
+                            }
+                        }
+                    )
+                }
+            }
             if (online.isEmpty() && offline.isEmpty() && pinnedDevices.isEmpty() &&
                 direct.devices.isEmpty() && !direct.connected &&
-                bleState.devices.isEmpty() && blePending.isEmpty()
+                bleState.devices.isEmpty() && blePending.isEmpty() && relayRows.isEmpty()
             ) {
                 item(key = "empty") {
                     EmptyDevices()
@@ -811,6 +943,82 @@ fun ListScreen(
         )
     }
 
+    if (roomOpen) {
+        AlertDialog(
+            onDismissRequest = { if (!roomBusy) roomOpen = false },
+            title = { Text("创建或加入房间") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = roomName,
+                            onValueChange = { if (it.length <= 20) roomName = it },
+                            label = { Text("房间名称") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilledTonalButton(
+                            enabled = !roomBusy && roomName.isNotBlank(),
+                            onClick = {
+                                roomBusy = true
+                                scope.launch {
+                                    runCatching { repo.createRelayRoom(roomName) }
+                                        .onSuccess { id ->
+                                            roomOpen = false
+                                            roomName = ""
+                                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
+                                        }
+                                        .onFailure { context.showError(it.message ?: "创建失败") }
+                                    roomBusy = false
+                                }
+                            }
+                        ) { Text("创建") }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = roomCode,
+                            onValueChange = { input ->
+                                roomCode = input.filter { it.isDigit() }.take(6)
+                            },
+                            label = { Text("房间号") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilledTonalButton(
+                            enabled = !roomBusy && roomCode.length == 6,
+                            onClick = {
+                                roomBusy = true
+                                scope.launch {
+                                    runCatching { repo.joinRelayRoom(roomCode) }
+                                        .onSuccess { id ->
+                                            roomOpen = false
+                                            roomCode = ""
+                                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
+                                        }
+                                        .onFailure { context.showError(it.message ?: "加入失败") }
+                                    roomBusy = false
+                                }
+                            }
+                        ) { Text("加入") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !roomBusy,
+                    onClick = { roomOpen = false }
+                ) { Text("关闭") }
+            }
+        )
+    }
+
     if (connectionsOpen) {
         ModalBottomSheet(
             onDismissRequest = { connectionsOpen = false },
@@ -854,6 +1062,96 @@ fun ListScreen(
                     }
                 )
             }
+        }
+    }
+
+    if (helpOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { helpOpen = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
+            ) {
+                Text(
+                    text = "查看解决方法",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                if (hotspotSupported) {
+                    HelpRow(
+                        icon = Icons.Rounded.WifiTethering,
+                        label = "热点共享",
+                        usage = "用法：打开热点，另一台设备扫码或输入密码连上后，两台设备组成一个临时局域网，可以互传文件、打开网页聊天。"
+                    )
+                }
+                HelpRow(
+                    icon = Icons.Rounded.Devices,
+                    label = "Wi-Fi Direct",
+                    usage = "用法：两台设备都打开 Wi-Fi Direct 并连接，连上后两台设备直接组成点对点网络，可以互传文件。"
+                )
+                HelpRow(
+                    icon = Icons.Rounded.Bluetooth,
+                    label = "蓝牙广播",
+                    usage = "用法：打开蓝牙广播，另一台设备搜索并连接，连上后通过蓝牙直接传文件，不需要网络。"
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "点击查看更多连接方式",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable {
+                                helpOpen = false
+                                connectionsOpen = true
+                            }
+                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HelpRow(icon: ImageVector, label: String, usage: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                text = label,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = usage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }
@@ -1032,6 +1330,27 @@ private fun TextBadge(text: String) {
 }
 
 @Composable
+private fun SectionLabelWithAction(
+    text: String,
+    action: @Composable () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 12.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        action()
+    }
+}
+
+@Composable
 private fun ConversationRow(
     conv: ConversationUi,
     preview: String,
@@ -1039,6 +1358,8 @@ private fun ConversationRow(
     blocked: Boolean,
     muted: Boolean,
     pinned: Boolean,
+    isRelay: Boolean = false,
+    isRelayPublic: Boolean = false,
     onClick: () -> Unit,
     onToggleBlock: () -> Unit,
     onToggleMute: () -> Unit,
@@ -1046,7 +1367,8 @@ private fun ConversationRow(
     onSetAlias: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
-    onShowInfo: () -> Unit
+    onShowInfo: () -> Unit,
+    onLeaveRoom: (() -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -1070,12 +1392,13 @@ private fun ConversationRow(
     ) {
         AvatarIcon(
             icon = when {
+                isRelay -> if (isRelayPublic) Icons.Rounded.Public else Icons.Rounded.Forum
                 isPublic -> Icons.Rounded.Public
                 conv.id.startsWith(BLE_CONVERSATION_PREFIX) -> Icons.Rounded.Bluetooth
                 else -> platformIcon(conv.platform)
             },
             online = conv.online,
-            orPublic = isPublic
+            orPublic = isPublic || isRelayPublic
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -1106,10 +1429,10 @@ private fun ConversationRow(
         }
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
-            if (conv.id.startsWith(BLE_CONVERSATION_PREFIX)) {
-                TextBadge("BLE")
-            } else {
-                IpBadge(conv.addr)
+            when {
+                isRelay -> TextBadge("公网")
+                conv.id.startsWith(BLE_CONVERSATION_PREFIX) -> TextBadge("BLE")
+                else -> IpBadge(conv.addr)
             }
             if (conv.unread > 0) {
                 Spacer(Modifier.height(4.dp))
@@ -1140,6 +1463,34 @@ private fun ConversationRow(
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
         ) {
+            if (isRelay) {
+                ConvMenuItem(
+                    icon = Icons.Rounded.NotificationsOff,
+                    label = "免打扰",
+                    onClick = { onToggleMute() },
+                    trailing = { Switch(checked = muted, onCheckedChange = { onToggleMute() }) }
+                )
+                MenuDivider()
+                ConvMenuItem(
+                    icon = Icons.Rounded.DeleteSweep,
+                    label = "清空聊天记录",
+                    onClick = {
+                        menuOpen = false
+                        onClear()
+                    }
+                )
+                if (!isRelayPublic && onLeaveRoom != null) {
+                    MenuDivider()
+                    ConvMenuItem(
+                        icon = Icons.Rounded.Logout,
+                        label = "退出房间",
+                        onClick = {
+                            menuOpen = false
+                            onLeaveRoom()
+                        }
+                    )
+                }
+            } else {
             ConvMenuItem(
                 icon = Icons.Rounded.Info,
                 label = "查看设备信息",
@@ -1202,6 +1553,7 @@ private fun ConversationRow(
                     }
                 )
             }
+            }
         }
         }
         }
@@ -1219,6 +1571,7 @@ private fun ConversationRow(
 private fun ConvMenuItem(
     icon: ImageVector,
     label: String,
+    description: String? = null,
     onClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null
 ) {
@@ -1232,11 +1585,21 @@ private fun ConvMenuItem(
             )
         },
         text = {
-            Text(
-                text = label,
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Column {
+                Text(
+                    text = label,
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (description != null) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
         },
         trailingIcon = trailing,
         onClick = onClick

@@ -16,12 +16,21 @@ android/signing.properties
 *.jks
 *.keystore
 
-# xlan 运行时数据（只保留可执行文件）
+# xlan 运行时数据（只保留各平台可执行文件）
 desktop/resources/xlan/*
 !desktop/resources/xlan/xlan.exe
+!desktop/resources/xlan/xlan-linux-x64
+!desktop/resources/xlan/xlan-darwin-x64
+!desktop/resources/xlan/xlan-darwin-arm64
 *.db
 *.db-shm
 *.db-wal
+
+# 中继服务构建产物与运行时数据
+relay/xlan-relay.exe
+relay/xlan-relay.exe~*
+relay/xlan-relay
+relay/data/
 
 # 其他
 .claude/

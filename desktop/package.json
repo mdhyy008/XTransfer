@@ -1,8 +1,9 @@
 {
   "name": "xtransfer-desktop",
-  "version": "0.1.0-Beta",
+  "version": "0.2.0-Beta",
   "private": true,
-  "description": "X互传 Windows 客户端",
+  "description": "X互传 局域网互传客户端",
+  "author": "明灯花月夜",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -10,6 +11,8 @@
     "build:ble": "dotnet publish bluetooth/BleBridge/BleBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o resources/ble",
     "start": "electron-vite preview",
     "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:linux": "npm run build && electron-builder --linux --x64",
+    "dist:mac": "npm run build && electron-builder --mac --x64 --arm64",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -65,20 +68,6 @@
         "to": "bootstrap.min.css"
       }
     ],
-    "extraFiles": [
-      {
-        "from": "resources/xlan/xlan.exe",
-        "to": "xlan/xlan.exe"
-      },
-      {
-        "from": "resources/screenshot/XShot.exe",
-        "to": "screenshot/XShot.exe"
-      },
-      {
-        "from": "resources/ble/BleBridge.exe",
-        "to": "ble/BleBridge.exe"
-      }
-    ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/node-pty/**/*"
@@ -93,7 +82,66 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "XTransfer-${version}-win-${arch}.${ext}",
+      "extraFiles": [
+        {
+          "from": "resources/xlan/xlan.exe",
+          "to": "xlan/xlan.exe"
+        },
+        {
+          "from": "resources/screenshot/XShot.exe",
+          "to": "screenshot/XShot.exe"
+        },
+        {
+          "from": "resources/ble/BleBridge.exe",
+          "to": "ble/BleBridge.exe"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "executableName": "xtransfer",
+      "category": "Utility",
+      "artifactName": "XTransfer-${version}-linux-${arch}.${ext}",
+      "extraFiles": [
+        {
+          "from": "resources/xlan/xlan-linux-x64",
+          "to": "xlan/xlan-linux-x64"
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities",
+      "artifactName": "XTransfer-${version}-mac-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "resources/xlan/xlan-darwin-x64",
+          "to": "xlan/xlan-darwin-x64"
+        },
+        {
+          "from": "resources/xlan/xlan-darwin-arm64",
+          "to": "xlan/xlan-darwin-arm64"
+        }
+      ]
     }
   }
 }

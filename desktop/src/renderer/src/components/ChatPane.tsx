@@ -25,6 +25,7 @@ import AudiotrackRounded from '@mui/icons-material/AudiotrackRounded'
 import CancelRounded from '@mui/icons-material/CancelRounded'
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded'
 import DoneAllRounded from '@mui/icons-material/DoneAllRounded'
+import ErrorOutlineRounded from '@mui/icons-material/ErrorOutlineRounded'
 import FolderRounded from '@mui/icons-material/FolderRounded'
 import FolderZipRounded from '@mui/icons-material/FolderZipRounded'
 import ImageRounded from '@mui/icons-material/ImageRounded'
@@ -34,7 +35,7 @@ import PhotoLibraryRounded from '@mui/icons-material/PhotoLibraryRounded'
 import PictureAsPdfRounded from '@mui/icons-material/PictureAsPdfRounded'
 import LanguageRounded from '@mui/icons-material/LanguageRounded'
 import MoreVertRounded from '@mui/icons-material/MoreVertRounded'
-import ReplayRounded from '@mui/icons-material/ReplayRounded'
+import PublicRounded from '@mui/icons-material/PublicRounded'
 import ScreenshotRounded from '@mui/icons-material/ScreenshotRounded'
 import SendRounded from '@mui/icons-material/SendRounded'
 import StopCircleRounded from '@mui/icons-material/StopCircleRounded'
@@ -43,6 +44,7 @@ import type {
   Conversation,
   FileEntry,
   Message,
+  RelayState,
   WebChatStatus
 } from '../../../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../../../shared/types'
@@ -71,6 +73,8 @@ type Props = {
   serviceRunning: boolean
   lanOnline: boolean
   bluetooth?: BleState
+  relay?: RelayState
+  onLeaveRoom?: () => void
   trusted?: boolean
   onSetTrust: (trusted: boolean) => void
   publicNotify?: boolean
@@ -192,6 +196,7 @@ function StatusLine({
 }
 
 const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'ico'])
+const EXEC_EXT = new Set(['exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'ps1'])
 const AUDIO_EXT = new Set(['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wma'])
 const VIDEO_EXT = new Set(['mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', 'wmv', 'flv', 'ts', 'mpg', 'mpeg', '3gp'])
 const ARCHIVE_EXT = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'])
@@ -200,6 +205,13 @@ const DOC_EXT = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md
 function extOf(name: string): string {
   const lower = name.toLowerCase()
   return lower.includes('.') ? lower.slice(lower.lastIndexOf('.') + 1) : ''
+}
+
+function needsViewConfirm(message: Message): boolean {
+  const ext = extOf(message.file_name ?? '')
+  if (EXEC_EXT.has(ext)) return true
+  const size = message.file_size || message.total || 0
+  return IMAGE_EXT.has(ext) && size > 2 * 1024 * 1024
 }
 
 export function fileKindLabel(name: string): string {
@@ -250,7 +262,7 @@ function FileCard({
   message,
   mine,
   missing,
-  onRetry,
+  onShowError,
   onCancelSend,
   onCancelReceive,
   onOpen,
@@ -259,7 +271,7 @@ function FileCard({
   message: Message
   mine: boolean
   missing: boolean
-  onRetry: (id: string) => void
+  onShowError: () => void
   onCancelSend: (id: string) => void
   onCancelReceive: (id: string) => void
   onOpen: () => void
@@ -274,7 +286,9 @@ function FileCard({
     message.status === 'peer_canceled' ||
     message.status === 'rejected'
   const canCancel =
-    !missing && (mine ? message.status === 'queued' || message.status === 'sending' || active : active)
+    !missing &&
+    message.channel !== 'relay' &&
+    (mine ? message.status === 'queued' || message.status === 'sending' || active : active)
   const openable = !missing && (message.status === 'done' || message.status === 'duplicate')
   const thumb = useThumb(message)
   return (
@@ -339,14 +353,10 @@ function FileCard({
             </IconButton>
           </Tooltip>
         )}
-        {mine && !missing && message.status === 'failed' && message.local_path && (
-          <Tooltip title="重试">
-            <IconButton
-              size="small"
-              onClick={() => onRetry(message.id)}
-              sx={{ color: 'inherit' }}
-            >
-              <ReplayRounded fontSize="small" />
+        {mine && message.status === 'failed' && (
+          <Tooltip title="发送失败">
+            <IconButton size="small" onClick={onShowError} sx={{ color: 'inherit' }}>
+              <ErrorOutlineRounded fontSize="small" />
             </IconButton>
           </Tooltip>
         )}
@@ -388,6 +398,9 @@ function MessageRow({
   onAcceptAll,
   onRetry,
   onRetryText,
+  onRetryRelay,
+  onShowError,
+  onRequestView,
   onCancelSend,
   onOpenFile,
   onContextMenu
@@ -398,12 +411,24 @@ function MessageRow({
   onAcceptAll?: () => void
   onRetry: (id: string) => void
   onRetryText: (id: string) => void
+  onRetryRelay: (message: Message) => void
+  onShowError: (message: Message) => void
+  onRequestView: (message: Message) => void
   onCancelSend: (id: string) => void
   onOpenFile: (message: Message) => void
   onContextMenu: (event: React.MouseEvent, missing: boolean) => void
 }) {
   const mine = message.direction === 'out'
   const missing = useMissingFile(message)
+  if (message.recalled) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
+        <Typography sx={{ fontSize: 11.5, color: 'text.secondary' }}>
+          {`${mine ? '' : `${message.from_name || message.from_id} `}撤回了一条消息`}
+        </Typography>
+      </Box>
+    )
+  }
   const pending = message.status === 'pending' && message.kind !== 'text' && !mine
   const spinning = mine && message.kind === 'text' && message.status === 'sending'
   const handleContext = (event: React.MouseEvent): void => {
@@ -464,10 +489,16 @@ function MessageRow({
               message={message}
               mine={mine}
               missing={missing}
-              onRetry={onRetry}
+              onShowError={() => onShowError(message)}
               onCancelSend={onCancelSend}
               onCancelReceive={(id) => onDecide(id, 'cancel')}
-              onOpen={() => onOpenFile(message)}
+              onOpen={() => {
+                if (message.channel === 'relay' && !message.local_path && needsViewConfirm(message)) {
+                  onRequestView(message)
+                  return
+                }
+                onOpenFile(message)
+              }}
               onContextMenu={handleContext}
             />
           )}
@@ -503,10 +534,19 @@ function MessageRow({
         )}
         {mine && message.kind === 'text' && message.status === 'failed' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.5 }}>
+            <IconButton
+              size="small"
+              onClick={() => onShowError(message)}
+              sx={{ color: 'error.main', width: 18, height: 18 }}
+            >
+              <ErrorOutlineRounded sx={{ fontSize: 15 }} />
+            </IconButton>
             <Typography sx={{ fontSize: 11, color: 'error.main' }}>发送失败</Typography>
             <Button
               size="small"
-              onClick={() => onRetryText(message.id)}
+              onClick={() =>
+                message.channel === 'relay' ? onRetryRelay(message) : onRetryText(message.id)
+              }
               sx={{ minWidth: 0, minHeight: 20, px: 0.75, py: 0, fontSize: 11 }}
             >
               重试
@@ -531,6 +571,8 @@ export default function ChatPane({
   serviceRunning,
   lanOnline,
   bluetooth,
+  relay,
+  onLeaveRoom,
   trusted,
   onSetTrust,
   publicNotify,
@@ -565,6 +607,8 @@ export default function ChatPane({
   } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Message | null>(null)
   const [confirmMissing, setConfirmMissing] = useState(false)
+  const [viewConfirm, setViewConfirm] = useState<Message | null>(null)
+  const [errorTarget, setErrorTarget] = useState<Message | null>(null)
   const [infoTarget, setInfoTarget] = useState<Message | null>(null)
   const [folderSize, setFolderSize] = useState<number | null>(null)
   const [trustAnchor, setTrustAnchor] = useState<HTMLElement | null>(null)
@@ -577,6 +621,10 @@ export default function ChatPane({
   const [webBusy, setWebBusy] = useState(false)
   const [webStatus, setWebStatus] = useState<WebChatStatus | null>(null)
   const [webQr, setWebQr] = useState('')
+  const [membersOpen, setMembersOpen] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [leaveOpen, setLeaveOpen] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -609,6 +657,9 @@ export default function ChatPane({
     setSearchOpen(false)
     setSearchQuery('')
     setAliasOpen(false)
+    setMembersOpen(false)
+    setRenameOpen(false)
+    setLeaveOpen(false)
   }, [conv.id])
 
   const pendingIncoming = useMemo(
@@ -676,12 +727,24 @@ export default function ChatPane({
     : undefined
   const bleConnected = isBle && bluetooth?.on === true && bleDevice?.connected === true
   const bleConnecting = isBle && bleDevice?.connecting === true
-  const transportReady = isBle ? bleConnected : serviceRunning
+  const isRelay = conv.id.startsWith('relay:')
+  const relayRoomId = isRelay ? conv.id.slice('relay:'.length) : ''
+  const relayRoom = isRelay
+    ? (relay?.rooms ?? []).find((room) => room.id === relayRoomId)
+    : undefined
+  const relayPublic = relayRoomId === 'public'
+  const relayConnected = isRelay && relay?.connected === true
+  const relayConnecting = isRelay && relay?.connecting === true
+  const relayIsCreator = relayRoom?.creator !== undefined && relayRoom.creator === relay?.deviceId
+  const relayMembers = isRelay ? (relay?.members[relayRoomId] ?? []) : []
+  const transportReady = isBle ? bleConnected : isRelay ? relayConnected : serviceRunning
   const online = isBle
     ? bleConnected
-    : conv.id === PUBLIC_CONVERSATION_ID
-      ? lanOnline
-      : conv.online
+    : isRelay
+      ? relayConnected
+      : conv.id === PUBLIC_CONVERSATION_ID
+        ? lanOnline
+        : conv.online
   const canSend = transportReady && body.trim() !== '' && !sending
 
   const bleAttemptRef = useRef('')
@@ -765,6 +828,24 @@ export default function ChatPane({
       .catch(() => notify('复制失败', 'error'))
   }
 
+  const downloadRelayFile = (message: Message): void => {
+    closeMenu()
+    void window.xt
+      .relayDownload(message.id)
+      .then(() => notify('已保存'))
+      .catch((error) => notify(error instanceof Error ? error.message : '下载失败', 'error'))
+  }
+
+  const retryFailed = (message: Message): void => {
+    if (message.channel === 'relay') {
+      if (message.kind === 'file') retryRelayFile(message)
+      else retryRelayText(message)
+      return
+    }
+    if (message.kind === 'file') onRetry(message.id)
+    else onRetryText(message.id)
+  }
+
   const saveAs = (message: Message): void => {
     const source = message.local_path
     closeMenu()
@@ -783,8 +864,32 @@ export default function ChatPane({
   }
 
   const retrySend = (message: Message): void => {
+    if (message.channel === 'relay') {
+      if (message.kind === 'file') retryRelayFile(message)
+      else retryRelayText(message)
+      closeMenu()
+      return
+    }
     onRetry(message.id)
     closeMenu()
+  }
+
+  const retryRelayText = (message: Message): void => {
+    const text = message.body
+    if (!text) return
+    void window.xt
+      .deleteMessage(message.id)
+      .then(() => window.xt.relaySend(relayRoomId, text))
+      .catch((error) => notify(error instanceof Error ? error.message : '重试失败', 'error'))
+  }
+
+  const retryRelayFile = (message: Message): void => {
+    const source = message.local_path
+    if (!source) return
+    void window.xt
+      .deleteMessage(message.id)
+      .then(() => window.xt.relaySendFiles(relayRoomId, [source]))
+      .catch((error) => notify(error instanceof Error ? error.message : '重试失败', 'error'))
   }
 
   const askDelete = (message: Message, missing: boolean): void => {
@@ -897,6 +1002,12 @@ export default function ChatPane({
   const menuHasPath = !!menuMessage?.local_path
   const menuCanSaveAs =
     menuMessage?.kind === 'file' && menuHasPath && !menuShown?.missing
+  const menuCanDownload =
+    isRelay &&
+    relayPublic &&
+    menuMessage?.kind === 'file' &&
+    menuMessage.direction === 'in' &&
+    !menuShown?.missing
   const menuCanOpenWith = menuIsAttach && menuHasPath && !menuShown?.missing
   const menuCanCancel =
     menuMessage !== undefined &&
@@ -914,47 +1025,74 @@ export default function ChatPane({
     menuHasPath &&
     !menuShown?.missing
   const menuCanDelete = menuMessage !== undefined && !isSendingMessage(menuMessage)
+  const menuCanRecall =
+    isRelay &&
+    !relayPublic &&
+    menuMessage !== undefined &&
+    menuMessage.status === 'done' &&
+    (menuMessage.direction === 'out' || relayIsCreator)
 
   const messageMenuItems: React.ReactNode[] = []
-  if (menuIsText && menuMessage) {
-    messageMenuItems.push(<MenuItem onClick={() => copyText(menuMessage)}>复制文本</MenuItem>)
-  }
-  if (!menuIsText && menuHasPath && menuMessage) {
-    messageMenuItems.push(<MenuItem onClick={() => copyPath(menuMessage)}>复制文件路径</MenuItem>)
-  }
-  if (menuIsAttach && menuMessage) {
-    messageMenuItems.push(
-      <MenuItem
-        onClick={() => {
-          setInfoTarget(menuMessage)
-          closeMenu()
-        }}
-      >
-        查看文件信息
-      </MenuItem>
-    )
-  }
-  if (menuCanSaveAs && menuMessage) {
-    messageMenuItems.push(<MenuItem onClick={() => saveAs(menuMessage)}>另存为…</MenuItem>)
-  }
-  if (menuCanOpenWith && menuMessage) {
-    messageMenuItems.push(
-      <MenuItem onClick={() => openWithOther(menuMessage)}>用其他应用打开</MenuItem>
-    )
-    messageMenuItems.push(
-      <MenuItem onClick={() => revealFile(menuMessage)}>打开所在文件夹</MenuItem>
-    )
-  }
-  if (menuCanCancel && menuMessage) {
-    messageMenuItems.push(<MenuItem onClick={() => cancelSend(menuMessage)}>取消发送</MenuItem>)
-  }
-  if (menuCanRetry && menuMessage) {
-    messageMenuItems.push(<MenuItem onClick={() => retrySend(menuMessage)}>重试</MenuItem>)
-  }
-  if (menuCanDelete && menuMessage) {
-    messageMenuItems.push(
-      <MenuItem onClick={() => askDelete(menuMessage, !!menuShown?.missing)}>删除</MenuItem>
-    )
+  if (menuMessage !== undefined && !menuMessage.recalled) {
+    if (menuIsText && menuMessage) {
+      messageMenuItems.push(<MenuItem onClick={() => copyText(menuMessage)}>复制文本</MenuItem>)
+    }
+    if (!menuIsText && menuHasPath && menuMessage) {
+      messageMenuItems.push(<MenuItem onClick={() => copyPath(menuMessage)}>复制文件路径</MenuItem>)
+    }
+    if (menuIsAttach && menuMessage) {
+      messageMenuItems.push(
+        <MenuItem
+          onClick={() => {
+            setInfoTarget(menuMessage)
+            closeMenu()
+          }}
+        >
+          查看文件信息
+        </MenuItem>
+      )
+    }
+    if (menuCanDownload && menuMessage) {
+      messageMenuItems.push(
+        <MenuItem onClick={() => downloadRelayFile(menuMessage)}>下载</MenuItem>
+      )
+    }
+    if (menuCanSaveAs && menuMessage) {
+      messageMenuItems.push(<MenuItem onClick={() => saveAs(menuMessage)}>另存为…</MenuItem>)
+    }
+    if (menuCanOpenWith && menuMessage) {
+      messageMenuItems.push(
+        <MenuItem onClick={() => openWithOther(menuMessage)}>用其他应用打开</MenuItem>
+      )
+      messageMenuItems.push(
+        <MenuItem onClick={() => revealFile(menuMessage)}>打开所在文件夹</MenuItem>
+      )
+    }
+    if (menuCanCancel && menuMessage) {
+      messageMenuItems.push(<MenuItem onClick={() => cancelSend(menuMessage)}>取消发送</MenuItem>)
+    }
+    if (menuCanRetry && menuMessage) {
+      messageMenuItems.push(<MenuItem onClick={() => retrySend(menuMessage)}>重试</MenuItem>)
+    }
+    if (menuCanRecall && menuMessage) {
+      messageMenuItems.push(
+        <MenuItem
+          onClick={() => {
+            closeMenu()
+            window.xt.relayRecall(relayRoomId, menuMessage.id).catch((error: unknown) =>
+              notify(error instanceof Error ? error.message : '撤回失败', 'error')
+            )
+          }}
+        >
+          撤回
+        </MenuItem>
+      )
+    }
+    if (menuCanDelete && menuMessage) {
+      messageMenuItems.push(
+        <MenuItem onClick={() => askDelete(menuMessage, !!menuShown?.missing)}>删除</MenuItem>
+      )
+    }
   }
 
   return (
@@ -984,7 +1122,7 @@ export default function ChatPane({
             )}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            {bleConnecting ? (
+            {bleConnecting || relayConnecting ? (
               <CircularProgress size={9} thickness={6} />
             ) : (
               <Box
@@ -1001,15 +1139,21 @@ export default function ChatPane({
                 ? lanOnline
                   ? '已连接'
                   : '未连接'
-                : isBle
-                  ? bleConnected
+                : isRelay
+                  ? relayConnected
                     ? '已连接'
-                    : bleConnecting
+                    : relayConnecting
                       ? '正在连接'
                       : '未连接'
-                  : online
-                    ? '在线'
-                    : '离线'}
+                  : isBle
+                    ? bleConnected
+                      ? '已连接'
+                      : bleConnecting
+                        ? '正在连接'
+                        : '未连接'
+                    : online
+                      ? '在线'
+                      : '离线'}
             </Typography>
             <Box
               onClick={showReconnect && !reconnectBusy ? startReconnect : undefined}
@@ -1038,6 +1182,10 @@ export default function ChatPane({
               >
                 {isBle ? (
                   <BluetoothRounded
+                    sx={{ fontSize: 13, color: online ? 'success.contrastText' : 'text.disabled' }}
+                  />
+                ) : isRelay ? (
+                  <PublicRounded
                     sx={{ fontSize: 13, color: online ? 'success.contrastText' : 'text.disabled' }}
                   />
                 ) : (
@@ -1078,7 +1226,7 @@ export default function ChatPane({
             </IconButton>
           </Tooltip>
         )}
-        {(isPublic || isBle || trusted !== undefined) && (
+        {(isPublic || isBle || isRelay || trusted !== undefined) && (
           <>
             <IconButton size="small" onClick={(event) => setTrustAnchor(event.currentTarget)}>
               <MoreVertRounded fontSize="small" />
@@ -1097,7 +1245,66 @@ export default function ChatPane({
                 }
               }}
             >
-              {isPublic ? (
+              {isRelay && !relayPublic ? (
+                <>
+                  <MenuItem
+                    sx={{ gap: 2, pr: 1 }}
+                    onClick={() => onSetMuted(!muted)}
+                  >
+                    <Typography sx={{ flex: 1, fontSize: 14 }}>免打扰</Typography>
+                    <Switch
+                      size="small"
+                      edge="end"
+                      checked={!!muted}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => onSetMuted(event.target.checked)}
+                    />
+                  </MenuItem>
+                  <Divider />
+                  <MenuItem
+                    onClick={() => {
+                      setTrustAnchor(null)
+                      setMembersOpen(true)
+                      window.xt.relayMembers(relayRoomId).catch(() => {})
+                    }}
+                  >
+                    群成员
+                  </MenuItem>
+                  {relayIsCreator && (
+                    <>
+                      <Divider />
+                      <MenuItem
+                        onClick={() => {
+                          setTrustAnchor(null)
+                          setRenameDraft(relayRoom?.name ?? '')
+                          setRenameOpen(true)
+                        }}
+                      >
+                        修改群名
+                      </MenuItem>
+                    </>
+                  )}
+                  <Divider />
+                  <MenuItem
+                    onClick={() => {
+                      setTrustAnchor(null)
+                      setConfirmClear(true)
+                    }}
+                  >
+                    清空聊天记录
+                  </MenuItem>
+                  <Divider />
+                  <MenuItem
+                    sx={{ color: 'error.main' }}
+                    onClick={() => {
+                      setTrustAnchor(null)
+                      setLeaveOpen(true)
+                    }}
+                  >
+                    退出房间
+                  </MenuItem>
+                </>
+              ) : isPublic || relayPublic ? (
                 <>
                   <MenuItem
                     sx={{ gap: 2, pr: 1 }}
@@ -1300,7 +1507,7 @@ export default function ChatPane({
                 )}
                 <MessageRow
                   message={message}
-                  showName={isPublic}
+                  showName={isPublic || isRelay}
                   onDecide={onDecide}
                   onAcceptAll={
                     message.id === lastPendingId
@@ -1309,6 +1516,11 @@ export default function ChatPane({
                   }
                   onRetry={onRetry}
                   onRetryText={onRetryText}
+                  onRetryRelay={(target) =>
+                    target.kind === 'file' ? retryRelayFile(target) : retryRelayText(target)
+                  }
+                  onShowError={setErrorTarget}
+                  onRequestView={setViewConfirm}
                   onCancelSend={onCancelSend}
                   onOpenFile={onOpenFile}
                   onContextMenu={(event, missing) => openMenu(event, message, missing)}
@@ -1331,13 +1543,15 @@ export default function ChatPane({
               ml: -0.75
             }}
           >
-            <Tooltip title="截图">
-              <span>
-                <IconButton size="small" disabled={!transportReady} onClick={onScreenshot}>
-                  <ScreenshotRounded sx={{ fontSize: 18 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
+            {!isRelay && (
+              <Tooltip title="截图">
+                <span>
+                  <IconButton size="small" disabled={!transportReady} onClick={onScreenshot}>
+                    <ScreenshotRounded sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Tooltip title="相册">
               <span>
                 <IconButton
@@ -1360,7 +1574,7 @@ export default function ChatPane({
                 </IconButton>
               </span>
             </Tooltip>
-            {!isBle && (
+            {!isBle && !isRelay && (
               <Tooltip title="文件夹">
                 <span>
                   <IconButton
@@ -1392,7 +1606,7 @@ export default function ChatPane({
             )}
           </Box>
         )}
-        {!isPublic && !isBle && bucketParts.length > 0 && (
+        {!isPublic && !isBle && !isRelay && bucketParts.length > 0 && (
           <Box
             onClick={onOpenBucket}
             sx={{
@@ -1443,7 +1657,15 @@ export default function ChatPane({
             minRows={1}
             maxRows={5}
             placeholder={
-              isBle && !bleConnected ? (bleConnecting ? '正在连接' : '蓝牙未连接') : '输入消息'
+              isBle && !bleConnected
+                ? bleConnecting
+                  ? '正在连接'
+                  : '蓝牙未连接'
+                : isRelay && !relayConnected
+                  ? relayConnecting
+                    ? '正在连接'
+                    : '公网未连接'
+                  : '输入消息'
             }
             value={body}
             disabled={!transportReady}
@@ -1506,7 +1728,15 @@ export default function ChatPane({
         )}
         {!transportReady && (
           <Typography sx={{ mt: 0.75, px: 1, fontSize: 12, color: 'warning.main' }}>
-            {isBle ? (bleConnecting ? '正在连接蓝牙设备' : '蓝牙未连接') : '服务未运行'}
+            {isBle
+              ? bleConnecting
+                ? '正在连接蓝牙设备'
+                : '蓝牙未连接'
+              : isRelay
+                ? relayConnecting
+                  ? '正在连接公网服务器'
+                  : relay?.error || '公网未连接'
+                : '服务未运行'}
           </Typography>
         )}
       </Box>
@@ -1605,6 +1835,69 @@ export default function ChatPane({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setInfoTarget(null)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={viewConfirm !== null} onClose={() => setViewConfirm(null)}>
+        <DialogTitle sx={{ fontSize: 18 }}>是否查看</DialogTitle>
+        <DialogContent sx={{ minWidth: 320, pt: 1, pb: 0 }}>
+          <Typography sx={{ fontSize: 13, wordBreak: 'break-all' }}>
+            {viewConfirm?.file_name}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setViewConfirm(null)}>取消</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const target = viewConfirm
+              setViewConfirm(null)
+              if (target) onOpenFile(target)
+            }}
+          >
+            查看
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={errorTarget !== null}
+        onClose={() => setErrorTarget(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontSize: 18 }}>发送失败</DialogTitle>
+        <DialogContent sx={{ pt: 1, pb: 0 }}>
+          <Box
+            sx={{
+              p: 1.25,
+              borderRadius: 2,
+              bgcolor: 'action.hover',
+              fontFamily: 'monospace',
+              fontSize: 12.5,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              userSelect: 'text',
+              maxHeight: 280,
+              overflow: 'auto'
+            }}
+          >
+            {errorTarget?.error_code || '发送失败'}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setErrorTarget(null)}>关闭</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const target = errorTarget
+              setErrorTarget(null)
+              if (target) retryFailed(target)
+            }}
+          >
+            重试
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -1759,6 +2052,103 @@ export default function ChatPane({
             }}
           >
             保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={membersOpen} onClose={() => setMembersOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>群成员</DialogTitle>
+        <DialogContent sx={{ minWidth: 360, pt: 1 }}>
+          {relayMembers.length === 0 ? (
+            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>暂无成员</Typography>
+          ) : (
+            relayMembers.map((member) => (
+              <Box
+                key={member.deviceId}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75 }}
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontSize: 14 }}>
+                    {member.name}
+                    {member.deviceId === relay?.deviceId ? '（我）' : ''}
+                    {member.creator ? '（群主）' : ''}
+                  </Typography>
+                  <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                    {member.online ? '在线' : '离线'}
+                  </Typography>
+                </Box>
+                {relayIsCreator && member.deviceId !== relay?.deviceId && (
+                  <Button
+                    size="small"
+                    color="error"
+                    onClick={() =>
+                      window.xt
+                        .relayKick(relayRoomId, member.deviceId)
+                        .catch((error: unknown) =>
+                          notify(error instanceof Error ? error.message : '移出失败', 'error')
+                        )
+                    }
+                  >
+                    移出
+                  </Button>
+                )}
+              </Box>
+            ))
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMembersOpen(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={renameOpen} onClose={() => setRenameOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>修改群名</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            value={renameDraft}
+            onChange={(event) => setRenameDraft(event.target.value)}
+            slotProps={{ htmlInput: { maxLength: 32 } }}
+            sx={{ mt: 1, minWidth: 320 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRenameOpen(false)}>取消</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const name = renameDraft.trim()
+              setRenameOpen(false)
+              if (!name) return
+              window.xt
+                .relayRename(relayRoomId, name)
+                .catch((error: unknown) =>
+                  notify(error instanceof Error ? error.message : '修改失败', 'error')
+                )
+            }}
+          >
+            保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={leaveOpen} onClose={() => setLeaveOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>退出房间</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: 14 }}>确定退出该房间吗？</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLeaveOpen(false)}>取消</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              setLeaveOpen(false)
+              onLeaveRoom?.()
+            }}
+          >
+            退出
           </Button>
         </DialogActions>
       </Dialog>

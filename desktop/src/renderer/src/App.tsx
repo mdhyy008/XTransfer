@@ -14,7 +14,6 @@ import {
   useMediaQuery
 } from '@mui/material'
 import AppsRounded from '@mui/icons-material/AppsRounded'
-import CloseRounded from '@mui/icons-material/CloseRounded'
 import type {
   Conversation,
   FileEntry,
@@ -30,6 +29,7 @@ import ChatPane from './components/ChatPane'
 import FileManager from './components/FileManager'
 import HotspotDialog from './components/HotspotDialog'
 import BluetoothDialog from './components/BluetoothDialog'
+import ConnectionsDialog from './components/ConnectionsDialog'
 import SettingsDialog from './components/SettingsDialog'
 import SharePage from './components/SharePage'
 import Sidebar from './components/Sidebar'
@@ -65,6 +65,9 @@ function Shell() {
   const [hotspotOpen, setHotspotOpen] = useState(false)
   const [bluetoothOpen, setBluetoothOpen] = useState(false)
   const [bluetoothBusy, setBluetoothBusy] = useState(false)
+  const [connectionsOpen, setConnectionsOpen] = useState(false)
+  // 用过任意一种连接方式后本会话不再提示，重启应用后重新出现。
+  const [solutionUsed, setSolutionUsed] = useState(false)
   const hotspotBusyRef = useRef(false)
   const dropTimer = useRef<number | undefined>(undefined)
 
@@ -426,6 +429,12 @@ function Shell() {
         if (files.length > 0) await sendEntries(files, false)
         return
       }
+      if (conv && conv.id.startsWith('relay:')) {
+        const files = entries.filter((entry) => entry.kind === 'file')
+        if (files.length < entries.length) notify('公网聊天室只支持发送单个文件', 'warning')
+        if (files.length > 0) await sendEntries(files, false)
+        return
+      }
       addEntries(entries)
       if (entries.length > 0) {
         const files = entries.filter((entry) => entry.kind === 'file').length
@@ -449,6 +458,23 @@ function Shell() {
     }
     if (usable.length < entries.length) {
       notify(`已跳过 ${entries.length - usable.length} 个不可用项目`, 'warning')
+    }
+    if (conv.id.startsWith('relay:')) {
+      const files = usable.filter((entry) => entry.kind === 'file')
+      if (files.length === 0) {
+        notify('公网聊天室只支持发送单个文件', 'warning')
+        return
+      }
+      try {
+        await window.xt.relaySendFiles(
+          conv.id.slice('relay:'.length),
+          files.map((entry) => entry.path)
+        )
+        if (clearBucket) setBucket([])
+      } catch (error) {
+        notify(error instanceof Error ? error.message : '发送失败', 'error')
+      }
+      return
     }
     const startedAt = Math.floor(Date.now() / 1000)
     for (const entry of usable) pendingSends.current.set(entry.path, startedAt)
@@ -516,6 +542,13 @@ function Shell() {
   }
 
   const handleOpenFile = (message: Message): void => {
+    if (message.channel === 'relay' && !message.local_path) {
+      window.xt
+        .relayCache(message.id)
+        .then((filePath) => openLocal(filePath, message.file_name || filePath, message.kind, true))
+        .catch((error) => notify(error instanceof Error ? error.message : '查看失败', 'error'))
+      return
+    }
     const filePath = message.local_path
     if (!filePath) return
     openLocal(filePath, message.file_name || filePath, message.kind, true)
@@ -570,6 +603,10 @@ function Shell() {
 
   const handleSend = async (body: string): Promise<void> => {
     if (!conv) throw new Error('未选择会话')
+    if (conv.id.startsWith('relay:')) {
+      await window.xt.relaySend(conv.id.slice('relay:'.length), body)
+      return
+    }
     await window.xt.sendText({
       to: conv.id === PUBLIC_CONVERSATION_ID ? '' : conv.id,
       body
@@ -599,12 +636,14 @@ function Shell() {
       .catch((error) => notify(error instanceof Error ? error.message : '操作失败', 'error'))
   }
 
-  const offline = lanReady && lan === null
-  const [offlineDismissed, setOfflineDismissed] = useState(false)
-  const offlineActive = offline && !offlineDismissed
+  const hotspotActive = hotspot?.running === true
+  const bluetoothActive = snapshot?.bluetooth.on === true
   useEffect(() => {
-    if (lan) setOfflineDismissed(false)
-  }, [lan])
+    if (hotspotActive || bluetoothActive) setSolutionUsed(true)
+  }, [hotspotActive, bluetoothActive])
+
+  const offline =
+    lanReady && lan === null && !solutionUsed && !hotspotActive && !bluetoothActive
 
   return (
     <ThemeProvider theme={theme}>
@@ -619,9 +658,6 @@ function Shell() {
         }}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => void handleDrop(event)}
-        onClickCapture={() => {
-          if (offlineActive) setOfflineDismissed(true)
-        }}
       >
         <TitleBar
           lan={lan}
@@ -675,10 +711,7 @@ function Shell() {
             flex: 1,
             minHeight: 0,
             display: 'flex',
-            flexDirection: 'column',
-            filter: offlineActive ? 'blur(7px)' : 'none',
-            pointerEvents: offlineActive ? 'none' : 'auto',
-            transition: 'filter 260ms ease'
+            flexDirection: 'column'
           }}
         >
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
@@ -696,7 +729,10 @@ function Shell() {
           serviceRunning={serviceRunning}
           settings={snapshot?.settings}
           bluetooth={snapshot?.bluetooth}
+          relay={snapshot?.relay}
           notify={notify}
+          lanOffline={offline}
+          onOpenConnections={() => setConnectionsOpen(true)}
         />
         {conv ? (
           <ChatPane
@@ -707,6 +743,19 @@ function Shell() {
             serviceRunning={serviceRunning}
             lanOnline={lan !== null}
             bluetooth={snapshot?.bluetooth}
+            relay={snapshot?.relay}
+            onLeaveRoom={() => {
+              const roomId = conv.id.slice('relay:'.length)
+              window.xt
+                .relayLeave(roomId)
+                .then(() => {
+                  setSelectedId(PUBLIC_CONVERSATION_ID)
+                  notify('已退出房间')
+                })
+                .catch((error) =>
+                  notify(error instanceof Error ? error.message : '退出失败', 'error')
+                )
+            }}
             trusted={conv.id === PUBLIC_CONVERSATION_ID ? undefined : peer?.trusted}
             onSetTrust={(trusted) => {
               window.xt
@@ -865,6 +914,20 @@ function Shell() {
           window.xt.openHotspotSettings().catch(() => {})
         }}
       />
+      <ConnectionsDialog
+        open={connectionsOpen}
+        hotspotSupported={hotspot?.supported === true}
+        bluetoothSupported={snapshot?.bluetooth.supported === true}
+        onOpenHotspot={() => {
+          setConnectionsOpen(false)
+          void openHotspot()
+        }}
+        onOpenBluetooth={() => {
+          setConnectionsOpen(false)
+          setBluetoothOpen(true)
+        }}
+        onClose={() => setConnectionsOpen(false)}
+      />
       <Snackbar
         open={notice !== null}
         autoHideDuration={3000}
@@ -921,29 +984,6 @@ function Shell() {
         </DialogActions>
       </Dialog>
       </Box>
-      {offlineActive && (
-        <Box
-          sx={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 48,
-            bottom: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 1,
-            pointerEvents: 'none',
-            zIndex: 10
-          }}
-        >
-          <CloseRounded sx={{ fontSize: 120, color: 'error.main' }} />
-          <Typography sx={{ fontSize: 15, fontWeight: 600, color: 'text.primary' }}>
-            未连接到局域网
-          </Typography>
-        </Box>
-      )}
       </Box>
     </ThemeProvider>
   )

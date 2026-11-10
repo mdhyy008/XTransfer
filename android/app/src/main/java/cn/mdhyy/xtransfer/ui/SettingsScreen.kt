@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -52,10 +53,12 @@ import androidx.compose.material.icons.rounded.FolderShared
 import androidx.compose.material.icons.rounded.FontDownload
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Smartphone
@@ -202,6 +205,14 @@ fun SettingsScreen(
     var chatSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var clearingChats by remember { mutableStateOf(false) }
     var cacheBytes by remember { mutableStateOf(0L) }
+    var showRelay by remember { mutableStateOf(false) }
+    var relayDraft by remember { mutableStateOf("") }
+    var relayTesting by remember { mutableStateOf(false) }
+    var relayTestMsg by remember { mutableStateOf<String?>(null) }
+    var relayTestOk by remember { mutableStateOf(false) }
+    var relayPendingConnect by remember { mutableStateOf(false) }
+    var relayErrorTitle by remember { mutableStateOf("") }
+    var relayErrorMsg by remember { mutableStateOf<String?>(null) }
 
     val notify: (String) -> Unit = { message ->
         pageScope.launch { snackbarHostState.showSnackbar(message) }
@@ -209,6 +220,18 @@ fun SettingsScreen(
 
     val ble = (context.applicationContext as XlanApp).ble
     val bleState by ble.state.collectAsStateWithLifecycle()
+    val relay = (context.applicationContext as XlanApp).relay
+    val relayState by relay.state.collectAsStateWithLifecycle()
+    LaunchedEffect(relayState.connected, relayState.connecting, relayState.error, relayPendingConnect) {
+        if (!relayPendingConnect) return@LaunchedEffect
+        if (relayState.connected) {
+            relayPendingConnect = false
+        } else if (!relayState.connecting && !relayState.error.isNullOrBlank()) {
+            relayPendingConnect = false
+            relayErrorTitle = "连接失败"
+            relayErrorMsg = relayState.error
+        }
+    }
     val bleEnable = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { }
@@ -452,6 +475,51 @@ fun SettingsScreen(
                                 checked = bleState.on,
                                 onCheckedChange = { toggleBle() }
                             )
+                        }
+                    )
+                    SettingDivider()
+                    SettingRow(
+                        icon = Icons.Rounded.Public,
+                        title = "中继服务器",
+                        description = if (relayState.connected) "已连接" else "未连接",
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                FilledTonalButton(
+                                    onClick = {
+                                        store.update(relayUrl = "")
+                                        notify("已清除")
+                                    },
+                                    enabled = relayState.connected,
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteSweep,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("清除", style = MaterialTheme.typography.labelMedium)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                FilledTonalButton(
+                                    onClick = {
+                                        relayDraft = settings.relayUrl
+                                        relayTestMsg = null
+                                        showRelay = true
+                                    },
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Link,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("连接", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                         }
                     )
                 }
@@ -730,6 +798,95 @@ fun SettingsScreen(
                     enabled = !savingName,
                     onClick = { showRename = false }
                 ) { Text("取消") }
+            }
+        )
+    }
+
+    if (showRelay) {
+        AlertDialog(
+            onDismissRequest = { showRelay = false },
+            title = { Text("中继服务器") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = relayDraft,
+                        onValueChange = { relayDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("服务器地址") }
+                    )
+                    val msg = relayTestMsg
+                    if (msg != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (relayTestOk) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val next = relayDraft.trim()
+                        store.update(relayUrl = next)
+                        relayPendingConnect = next.isNotEmpty()
+                        showRelay = false
+                        notify("已保存")
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !relayTesting,
+                    onClick = {
+                        relayTesting = true
+                        relayTestMsg = null
+                        pageScope.launch {
+                            val result = runCatching { relay.test(relayDraft.trim()) }
+                            relayTesting = false
+                            result.onSuccess {
+                                relayTestOk = true
+                                relayTestMsg = "测试成功"
+                            }.onFailure {
+                                relayTestOk = false
+                                relayTestMsg = null
+                                relayErrorTitle = "测试失败"
+                                relayErrorMsg = it.message ?: "连接失败"
+                            }
+                        }
+                    }
+                ) {
+                    if (relayTesting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("测试")
+                    }
+                }
+            }
+        )
+    }
+
+    val relayError = relayErrorMsg
+    if (relayError != null) {
+        AlertDialog(
+            onDismissRequest = { relayErrorMsg = null },
+            title = { Text(relayErrorTitle) },
+            text = {
+                SelectionContainer {
+                    Text(
+                        text = relayError,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { relayErrorMsg = null }) { Text("确定") }
             }
         )
     }

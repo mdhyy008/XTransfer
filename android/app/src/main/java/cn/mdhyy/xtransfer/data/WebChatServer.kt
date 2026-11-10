@@ -44,7 +44,8 @@ data class WebChatStatus(
  */
 class WebChatServer(
     context: Context,
-    private val repo: Repository
+    private val repo: Repository,
+    private val hotspot: LocalHotspot
 ) {
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -255,6 +256,10 @@ class WebChatServer(
 
     private fun broadcastTargets(): List<String> {
         val targets = LinkedHashSet<String>()
+        // 热点开着时对端在热点网段里，广播必须发到这张网卡的广播地址。
+        hotspot.linkAddress()?.let { (ip, prefix) ->
+            broadcastOf(ip, prefix)?.let { targets.add(it) }
+        }
         val cidr = repo.lan.value.info?.cidr
         if (cidr != null) {
             cidr.substringBefore('/').let { ip ->
@@ -302,7 +307,9 @@ class WebChatServer(
         stale.forEach { guests.remove(it) }
         val socket = server
         val running = socket != null && !socket.isClosed
-        val host = repo.lan.value.info?.cidr?.substringBefore('/').orEmpty()
+        // 热点开着时优先用热点网卡地址，局域网地址此时普通设备是连不上的。
+        val host = hotspot.linkAddress()?.first
+            ?: repo.lan.value.info?.cidr?.substringBefore('/').orEmpty()
         return WebChatStatus(
             running = running,
             url = if (running && host.isNotBlank()) "http://$host:${socket.localPort}/" else "",

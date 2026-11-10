@@ -30,6 +30,48 @@ function wifiPayload(ssid: string, password: string): string {
   return `WIFI:T:WPA;S:${qrEscape(ssid)};P:${qrEscape(password)};;`
 }
 
+function clockText(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false
+  })
+}
+
+function elapsedText(millis: number): string {
+  const total = Math.max(0, Math.floor(millis / 1000))
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`
+}
+
+function InfoRow({
+  label,
+  value,
+  divider,
+  mono
+}: {
+  label: string
+  value: string
+  divider?: boolean
+  mono?: boolean
+}) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        py: 1.25,
+        borderTop: divider ? 1 : 0,
+        borderColor: 'divider'
+      }}
+    >
+      <Typography sx={{ flex: 1, fontSize: 13, color: 'text.secondary' }}>{label}</Typography>
+      <Typography sx={{ fontSize: 14, fontWeight: 600, fontFamily: mono ? 'monospace' : undefined }}>
+        {value}
+      </Typography>
+    </Box>
+  )
+}
+
 export default function HotspotDialog({
   open,
   status,
@@ -41,6 +83,14 @@ export default function HotspotDialog({
 }: Props) {
   const running = status?.running === true
   const [qr, setQr] = useState('')
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!open || !running) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [open, running])
 
   useEffect(() => {
     if (!open || !running || !status) {
@@ -104,16 +154,18 @@ export default function HotspotDialog({
               )}
             </Box>
             <Box sx={{ width: '100%', bgcolor: 'background.paper', borderRadius: '20px', px: 2.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', py: 1.25 }}>
-                <Typography sx={{ flex: 1, fontSize: 13, color: 'text.secondary' }}>名称</Typography>
-                <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{status.ssid}</Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', py: 1.25, borderTop: 1, borderColor: 'divider' }}>
-                <Typography sx={{ flex: 1, fontSize: 13, color: 'text.secondary' }}>密码</Typography>
-                <Typography sx={{ fontSize: 14, fontWeight: 600, fontFamily: 'monospace' }}>
-                  {status.password}
-                </Typography>
-              </Box>
+              <InfoRow label="名称" value={status.ssid} />
+              <InfoRow label="密码" value={status.password} divider mono />
+              {status.startedAt !== undefined && (
+                <InfoRow label="开启时间" value={clockText(status.startedAt)} divider />
+              )}
+              {status.startedAt !== undefined && (
+                <InfoRow label="已开启" value={elapsedText(now - status.startedAt)} divider />
+              )}
+              {status.address && <InfoRow label="本机地址" value={status.address} divider />}
+              {status.clients !== undefined && (
+                <InfoRow label="已连接" value={`${status.clients} 台`} divider />
+              )}
             </Box>
             <Button
               fullWidth

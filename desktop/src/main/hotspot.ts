@@ -8,7 +8,7 @@ const HOTSPOT_PASSWORD = '33554488'
 const POWERSHELL = String.raw`
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$result = @{ supported = $true; running = $false; ssid = ""; password = ""; message = "" }
+$result = @{ supported = $true; running = $false; ssid = ""; password = ""; clients = 0; message = "" }
 $manager = $null
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -59,6 +59,7 @@ if ($null -ne $manager) {
       $config = $manager.GetCurrentAccessPointConfiguration()
       $result.ssid = [string]$config.Ssid
       $result.password = [string]$config.Passphrase
+      try { $result.clients = @($manager.GetTetheringClients()).Count } catch { $result.clients = 0 }
     }
   } catch {
     $result.message = $_.Exception.Message
@@ -66,6 +67,28 @@ if ($null -ne $manager) {
 }
 $result | ConvertTo-Json -Compress
 `
+
+// 系统移动热点的网卡（中文「本地连接* 10」，英文「Local Area Connection* 10」）。
+const HOTSPOT_IFACE = /^(本地连接|local area connection)\s*\*/i
+
+function prefixOf(netmask: string): number {
+  return netmask.split('.').reduce((sum, part) => {
+    const ones = Number(part).toString(2).replace(/0/g, '').length
+    return sum + ones
+  }, 0)
+}
+
+function hotspotAddress(): string {
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    if (!HOTSPOT_IFACE.test(name.trim())) continue
+    for (const info of list ?? []) {
+      if (info.family === 'IPv4' && !info.internal) {
+        return `${info.address}/${prefixOf(info.netmask)}`
+      }
+    }
+  }
+  return ''
+}
 
 function supportedPlatform(): boolean {
   if (process.platform !== 'win32') return false
@@ -77,6 +100,9 @@ function supportedPlatform(): boolean {
 function empty(message?: string): HotspotStatus {
   return { supported: supportedPlatform(), running: false, ssid: '', password: '', message }
 }
+
+// 记录本次运行中观察到热点在跑的时间点，用来展示开启时间和已开启时长。
+let runningSince: number | null = null
 
 function run(mode: 'status' | 'start' | 'stop'): Promise<HotspotStatus> {
   if (!supportedPlatform()) {
@@ -107,14 +133,24 @@ function run(mode: 'status' | 'start' | 'stop'): Promise<HotspotStatus> {
             running?: boolean
             ssid?: string
             password?: string
+            clients?: number
             message?: string
+          }
+          const running = data.running === true
+          if (running) {
+            runningSince ??= Date.now()
+          } else {
+            runningSince = null
           }
           resolve({
             supported: data.supported !== false,
-            running: data.running === true,
+            running,
             ssid: String(data.ssid ?? ''),
             password: String(data.password ?? ''),
-            message: data.message ? String(data.message) : undefined
+            message: data.message ? String(data.message) : undefined,
+            address: running ? hotspotAddress() : undefined,
+            clients: running ? Number(data.clients ?? 0) : undefined,
+            startedAt: running ? (runningSince ?? undefined) : undefined
           })
         } catch {
           resolve(empty('热点操作失败'))

@@ -10,6 +10,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 const val PUBLIC_CONVERSATION_ID = "__public__"
@@ -48,8 +50,10 @@ data class MessageEntity(
     val errorCode: String? = null,
     val xlanItemId: String? = null,
     val offerId: String? = null,
+    val relayFileId: String? = null,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val recalled: Boolean = false
 )
 
 data class ConversationRow(
@@ -66,6 +70,9 @@ interface ConversationDao {
            FROM conversations c ORDER BY c.lastMessageAt DESC"""
     )
     fun observeRows(): Flow<List<ConversationRow>>
+
+    @Query("SELECT * FROM conversations")
+    suspend fun all(): List<ConversationEntity>
 
     @Query("SELECT * FROM conversations WHERE id = :id")
     suspend fun get(id: String): ConversationEntity?
@@ -158,6 +165,9 @@ interface MessageDao {
     @Query("UPDATE messages SET localPath = :path, updatedAt = :now WHERE id = :id")
     suspend fun setLocalPath(id: String, path: String, now: Long)
 
+    @Query("UPDATE messages SET recalled = 1, updatedAt = :now WHERE id = :id")
+    suspend fun setRecalled(id: String, now: Long)
+
     @Query(
         """UPDATE messages SET status = 'queued', received = 0, speedBps = 0, errorCode = NULL,
              total = COALESCE(fileSize, total), updatedAt = :now WHERE id = :id"""
@@ -174,8 +184,20 @@ interface MessageDao {
     suspend fun idsByConversation(id: String): List<String>
 }
 
-@Database(entities = [ConversationEntity::class, MessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ConversationEntity::class, MessageEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+}
+
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN relayFileId TEXT")
+    }
 }

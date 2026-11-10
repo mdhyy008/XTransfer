@@ -6,7 +6,10 @@ import cn.mdhyy.xtransfer.data.AppDatabase
 import cn.mdhyy.xtransfer.data.BleManager
 import cn.mdhyy.xtransfer.data.LanShareServer
 import cn.mdhyy.xtransfer.data.LocalHotspot
+import cn.mdhyy.xtransfer.data.MIGRATION_1_2
+import cn.mdhyy.xtransfer.data.MIGRATION_2_3
 import cn.mdhyy.xtransfer.data.Notifications
+import cn.mdhyy.xtransfer.data.RelayManager
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.SettingsStore
 import cn.mdhyy.xtransfer.data.WebChatServer
@@ -31,18 +34,25 @@ class XlanApp : Application() {
     lateinit var webChat: WebChatServer
         private set
 
+    lateinit var relay: RelayManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
-        val db = Room.databaseBuilder(this, AppDatabase::class.java, "xtransfer.db").build()
+        val db = Room.databaseBuilder(this, AppDatabase::class.java, "xtransfer.db")
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .build()
         repo = Repository(this, db, SettingsStore(this))
         hotspot = LocalHotspot(this)
-        share = LanShareServer(this, repo)
+        share = LanShareServer(this, repo, hotspot)
         wifiDirect = WifiDirectManager(this)
         ble = BleManager(this)
         repo.attachBle(ble)
-        webChat = WebChatServer(this, repo)
+        webChat = WebChatServer(this, repo, hotspot)
         webChat.startIfEnabled()
+        relay = RelayManager(this, db, repo.settingsStore()) { repo.recvDir }
+        repo.attachRelay(relay)
     }
 
     companion object {

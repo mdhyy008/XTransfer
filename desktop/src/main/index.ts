@@ -45,6 +45,7 @@ import { Db } from './db'
 import { FileSender } from './fileSender'
 import { hotspotStart, hotspotStatus, hotspotStop } from './hotspot'
 import { openEventStream, request, type Endpoint } from './localApi'
+import { RelayService } from './relay'
 import { SettingsStore } from './settings'
 import { WebChatService } from './webChat'
 import { XlanService } from './xlanService'
@@ -58,6 +59,7 @@ const DATA_ROOT =
 const DATA_DIR = path.join(DATA_ROOT, 'data')
 const TMP_DIR = path.join(DATA_DIR, 'tmp')
 const THUMB_DIR = path.join(DATA_DIR, 'thumbs')
+const RELAY_CACHE_DIR = path.join(DATA_DIR, 'relay-cache')
 
 const thumbCache = new Map<string, string>()
 function rememberThumb(key: string, url: string): void {
@@ -67,19 +69,29 @@ function rememberThumb(key: string, url: string): void {
   }
   thumbCache.set(key, url)
 }
-const XLAN_DIR = app.isPackaged ? path.join(DATA_ROOT, 'xlan') : path.join(APP_DIR, 'resources', 'xlan')
+// macOS 的额外文件落在 Contents/Resources；Windows / Linux 落在可执行文件同级。
+const XLAN_DIR = app.isPackaged
+  ? process.platform === 'darwin'
+    ? path.join(process.resourcesPath, 'xlan')
+    : path.join(DATA_ROOT, 'xlan')
+  : path.join(APP_DIR, 'resources', 'xlan')
 const BLE_DIR = app.isPackaged ? path.join(APP_DIR, 'ble') : path.join(APP_DIR, 'resources', 'ble')
 
+// 便携版会解压到临时目录，运行时要把对应平台的 xlan 二进制带回 exe 所在目录。
+const XLAN_BINARIES = ['xlan.exe', 'xlan-darwin-x64', 'xlan-darwin-arm64', 'xlan-linux-x64', 'xlan-linux-arm64']
 if (app.isPackaged && XLAN_DIR !== path.join(APP_DIR, 'xlan')) {
   try {
     fs.mkdirSync(XLAN_DIR, { recursive: true })
-    const src = path.join(APP_DIR, 'xlan', 'xlan.exe')
-    const dst = path.join(XLAN_DIR, 'xlan.exe')
-    if (
-      fs.existsSync(src) &&
-      (!fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size)
-    ) {
-      fs.copyFileSync(src, dst)
+    for (const name of XLAN_BINARIES) {
+      const src = path.join(APP_DIR, 'xlan', name)
+      const dst = path.join(XLAN_DIR, name)
+      if (
+        fs.existsSync(src) &&
+        (!fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size)
+      ) {
+        fs.copyFileSync(src, dst)
+        if (process.platform !== 'win32') fs.chmodSync(dst, 0o755)
+      }
     }
   } catch {
     // 复制失败时 xlan 启动会给出明确错误
@@ -88,6 +100,9 @@ if (app.isPackaged && XLAN_DIR !== path.join(APP_DIR, 'xlan')) {
 const RECV_DIR = path.join(app.getPath('downloads'), 'X互传')
 
 const VIRTUAL_IFACE = /(vmware|virtualbox|vethernet|hyper-v|loopback|bluetooth|tailscale|zerotier|wsl|docker|vpn|tap-|tun)/i
+// 系统移动热点的网卡（中文「本地连接* 10」，英文「Local Area Connection* 10」）。
+// 热点开着时它的 IPv4 才是对端能连上的地址，优先级要排在物理网卡前面。
+const HOTSPOT_IFACE = /^(本地连接|local area connection)\s*\*/i
 
 const SPEEDTEST_CHUNK = 4 * 1024 * 1024
 const SPEEDTEST_SIZE = SPEEDTEST_CHUNK * 2
@@ -119,7 +134,7 @@ function currentLan(): LanInfo | null {
       const candidate = {
         name,
         cidr: `${address.address}/${prefix}`,
-        rank: VIRTUAL_IFACE.test(name) ? 2 : 0
+        rank: HOTSPOT_IFACE.test(name.trim()) ? -1 : VIRTUAL_IFACE.test(name) ? 2 : 0
       }
       if (!best || candidate.rank < best.rank) best = candidate
     }
@@ -798,7 +813,7 @@ function cacheSize(): number {
   return dirSize(TMP_DIR) + dirSize(THUMB_DIR) + dirSize(partsDir())
 }
 
-for (const dir of [DATA_DIR, TMP_DIR, THUMB_DIR, path.join(DATA_DIR, 'logs'), path.join(DATA_DIR, 'crashes')]) {
+for (const dir of [DATA_DIR, TMP_DIR, THUMB_DIR, RELAY_CACHE_DIR, path.join(DATA_DIR, 'logs'), path.join(DATA_DIR, 'crashes')]) {
   fs.mkdirSync(dir, { recursive: true })
 }
 app.setPath('userData', DATA_DIR)
@@ -1034,6 +1049,31 @@ const webChat = new WebChatService({
   host: () => shareHost(),
   peers: () => state.snapshot().peers,
   onChange: () => state.emit()
+})
+
+const relay = new RelayService({
+  db,
+  dataDir: DATA_DIR,
+  selfName: () => state.info?.name || state.config.deviceName || 'X互传用户',
+  recvDir: () => settings.recvDir || RECV_DIR,
+  cacheDir: () => RELAY_CACHE_DIR,
+  onChange: () => state.emit(),
+  onRelay: (relayState) => state.setRelay(relayState),
+  notify: (message) => {
+    if (!settings.value.notifications) return
+    if (settings.value.muted.includes(message.convId)) return
+    if (message.roomId === 'public' && !settings.value.publicNotifications) return
+    if (win && win.isVisible() && win.isFocused()) return
+    const body =
+      message.kind === 'text'
+        ? message.body
+        : `发来文件 ${message.fileName ?? ''}`
+    showNoticeMessage({
+      title: message.fromName || '公网聊天室',
+      body: body.slice(0, 160),
+      convId: message.convId
+    })
+  }
 })
 
 let win: BrowserWindow | null = null
@@ -1315,7 +1355,7 @@ let noticeIconUrl = ''
 const noticeFailures = new Map<string, { name: string; timer: NodeJS.Timeout }>()
 
 function assetPath(name: string): string {
-  return path.join(APP_DIR, 'resources', name)
+  return path.join(app.isPackaged ? process.resourcesPath : path.join(APP_DIR, 'resources'), name)
 }
 
 function noticeIcon(): string {
@@ -2057,7 +2097,7 @@ function openPreview(target: string): void {
   preview.on('closed', () => {
     if (previewWin === preview) previewWin = null
   })
-  void preview.loadFile(path.join(APP_DIR, 'resources', 'preview.html'))
+  void preview.loadFile(assetPath('preview.html'))
 }
 
 function showWindow(): void {
@@ -2449,6 +2489,7 @@ async function bootstrap(): Promise<void> {
     const result = await service.start()
     endpoint = result.endpoint
     state.setInfo(result.info)
+    relay.refreshProfile()
     // 上次关掉应用时蓝牙广播是开着的，启动后自动恢复。
     if (settings.value.bleEnabled && result.info.id) {
       void ble.start(result.info.id, result.info.name ?? '')
@@ -3276,9 +3317,37 @@ function registerIpc(): void {
     await shell.openExternal('ms-settings:network-mobilehotspot')
   })
 
+  ipcMain.handle('relay:create', (_event, name: string) => relay.createRoom(name ?? ''))
+  ipcMain.handle('relay:join', (_event, code: string) => relay.joinRoom(code ?? ''))
+  ipcMain.handle('relay:leave', (_event, roomId: string) => relay.leaveRoom(roomId ?? ''))
+  ipcMain.handle('relay:send', (_event, roomId: string, body: string) =>
+    relay.sendText(roomId ?? '', body ?? '')
+  )
+  ipcMain.handle('relay:sendFiles', (_event, roomId: string, paths: string[]) =>
+    relay.sendFiles(roomId ?? '', (paths ?? []).filter(Boolean))
+  )
+  ipcMain.handle('relay:recall', (_event, roomId: string, messageId: string) =>
+    relay.recall(roomId ?? '', messageId ?? '')
+  )
+  ipcMain.handle('relay:kick', (_event, roomId: string, deviceId: string) =>
+    relay.kick(roomId ?? '', deviceId ?? '')
+  )
+  ipcMain.handle('relay:rename', (_event, roomId: string, name: string) =>
+    relay.rename(roomId ?? '', name ?? '')
+  )
+  ipcMain.handle('relay:members', (_event, roomId: string) =>
+    relay.requestMembers(roomId ?? '')
+  )
+  ipcMain.handle('relay:test', (_event, address: string) => relay.testAddress(address ?? ''))
+  ipcMain.handle('relay:download', (_event, messageId: string) => relay.saveFile(messageId ?? ''))
+  ipcMain.handle('relay:cache', (_event, messageId: string) => relay.cacheFile(messageId ?? ''))
+
   ipcMain.handle('settings:update', (_event, patch: Partial<Settings>) => {
     settings.update(patch ?? {})
     state.setSettings(settings.value)
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'relayUrl')) {
+      relay.setAddress(settings.value.relayUrl)
+    }
     if (patch?.notifications === false) resetNotices()
     else if (patch?.theme !== undefined) closeNotice()
   })
@@ -3289,6 +3358,7 @@ function registerIpc(): void {
     await runXlanCli(['config', 'set', 'name', trimmed])
     await waitForName(trimmed)
     state.setConfig({ deviceName: trimmed })
+    relay.refreshProfile()
   })
 
   ipcMain.handle('config:pickRecvDir', async (event) => {
@@ -3544,6 +3614,7 @@ if (!locked) {
     startLanWatch()
     createTray()
     if (settings.value.webChat) void webChat.start().catch(() => {})
+    if (settings.value.relayUrl) relay.setAddress(settings.value.relayUrl)
     await bootstrap()
   })
 
@@ -3562,6 +3633,7 @@ if (!locked) {
     eventReq = null
     sender.dispose()
     ble.dispose()
+    relay.dispose()
     void webChat.stop()
     if (!hotspotOwned || hotspotClosing) return
     // 关热点要等 WinRT 返回，先拦下这次退出，最多等 8 秒。

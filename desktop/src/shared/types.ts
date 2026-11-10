@@ -12,7 +12,7 @@ export type Peer = {
 
 export type ItemKind = 'text' | 'file' | 'folder'
 
-export type Channel = 'dm' | 'public' | 'ble'
+export type Channel = 'dm' | 'public' | 'ble' | 'relay'
 
 export type Item = {
   id: string
@@ -43,6 +43,9 @@ export type HotspotStatus = {
   ssid: string
   password: string
   message?: string
+  address?: string
+  clients?: number
+  startedAt?: number
 }
 
 export type DeviceInfo = {
@@ -99,6 +102,7 @@ export type Message = {
   total: number
   speed_bps: number
   error_code?: string
+  recalled?: boolean
   created_at: number
   updated_at: number
 }
@@ -142,6 +146,36 @@ export type WebChatStatus = {
   error?: string
 }
 
+export type RelayRoom = {
+  id: string
+  code: string
+  name: string
+  creator: string
+  memberCount: number
+  createdAt: number
+}
+
+export type RelayMember = {
+  deviceId: string
+  name: string
+  platform?: string
+  online: boolean
+  creator: boolean
+}
+
+export type RelayState = {
+  configured: boolean
+  connected: boolean
+  connecting: boolean
+  address: string
+  deviceId: string
+  serverName?: string
+  maxFileSize?: number
+  error?: string
+  rooms: RelayRoom[]
+  members: Record<string, RelayMember[]>
+}
+
 export type SeedColor = 'purple' | 'blue' | 'green' | 'orange'
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -156,6 +190,7 @@ export type Settings = {
   misans: boolean
   bleEnabled: boolean
   webChat: boolean
+  relayUrl: string
   blocked: string[]
   aliases: Record<string, string>
   muted: string[]
@@ -190,6 +225,7 @@ export type Snapshot = {
   conversations: Conversation[]
   messages: Message[]
   bluetooth: BleState
+  relay: RelayState
   at: number
 }
 
@@ -324,6 +360,18 @@ export type XtApi = {
   webChatStatus: () => Promise<WebChatStatus>
   webChatStart: () => Promise<WebChatStatus>
   webChatStop: () => Promise<WebChatStatus>
+  relayCreate: (name: string) => Promise<string>
+  relayJoin: (code: string) => Promise<string>
+  relayLeave: (roomId: string) => Promise<void>
+  relaySend: (roomId: string, body: string) => Promise<void>
+  relaySendFiles: (roomId: string, paths: string[]) => Promise<void>
+  relayRecall: (roomId: string, messageId: string) => Promise<void>
+  relayKick: (roomId: string, deviceId: string) => Promise<void>
+  relayRename: (roomId: string, name: string) => Promise<void>
+  relayMembers: (roomId: string) => Promise<void>
+  relayTest: (address: string) => Promise<{ ok: boolean; name?: string; error?: string }>
+  relayDownload: (messageId: string) => Promise<string>
+  relayCache: (messageId: string) => Promise<string>
   syncPublic: () => Promise<void>
   minimize: () => void
   toggleMaximize: () => void

@@ -4,6 +4,7 @@ import type {
   Conversation,
   DeviceInfo,
   Peer,
+  RelayState,
   ServiceState,
   Settings,
   Snapshot
@@ -29,6 +30,7 @@ export class AppState {
     misans: true,
     bleEnabled: false,
     webChat: false,
+    relayUrl: '',
     blocked: [],
     aliases: {},
     muted: [],
@@ -42,6 +44,15 @@ export class AppState {
     scanning: false,
     advertising: false,
     devices: []
+  }
+  relay: RelayState = {
+    configured: false,
+    connected: false,
+    connecting: false,
+    address: '',
+    deviceId: '',
+    rooms: [],
+    members: {}
   }
   peers = new Map<string, Peer>()
   private lastOnline = new Map<string, boolean>()
@@ -71,6 +82,11 @@ export class AppState {
 
   setBle(patch: Partial<BleState>): void {
     this.bluetooth = { ...this.bluetooth, ...patch }
+    this.emit()
+  }
+
+  setRelay(relay: RelayState): void {
+    this.relay = relay
     this.emit()
   }
 
@@ -190,6 +206,7 @@ export class AppState {
       conversations,
       messages: this.db.listMessages(),
       bluetooth: this.bluetooth,
+      relay: this.relay,
       at: Date.now()
     }
   }

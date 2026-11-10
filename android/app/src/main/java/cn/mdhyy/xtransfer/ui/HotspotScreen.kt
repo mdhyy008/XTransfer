@@ -45,8 +45,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,6 +66,11 @@ import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.wifiQrPayload
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,7 +112,16 @@ fun HotspotScreen(onBack: () -> Unit) {
         ) {
             Spacer(Modifier.height(32.dp))
             when (val current = state) {
-                is HotspotState.Running -> RunningContent(current, onStop = { hotspot.stop() })
+                is HotspotState.Running -> {
+                    // 热点网卡拿到地址可能晚于热点开启，取不到就继续等。
+                    val link by produceState<String?>(null, current.startedAt) {
+                        while (value == null) {
+                            value = hotspot.linkAddress()?.let { "${it.first}/${it.second}" }
+                            if (value == null) delay(500)
+                        }
+                    }
+                    RunningContent(current, link, onStop = { hotspot.stop() })
+                }
                 else -> {
                     val starting = current is HotspotState.Starting
                     val failure = (current as? HotspotState.Failed)?.message
@@ -188,7 +205,18 @@ private fun HotspotBadge(starting: Boolean, failed: Boolean) {
 }
 
 @Composable
-private fun RunningContent(state: HotspotState.Running, onStop: () -> Unit) {
+private fun RunningContent(
+    state: HotspotState.Running,
+    address: String?,
+    onStop: () -> Unit
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.startedAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
     val payload = remember(state.ssid, state.password) {
         wifiQrPayload(state.ssid, state.password)
     }
@@ -226,15 +254,44 @@ private fun RunningContent(state: HotspotState.Running, onStop: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             CredentialRow("名称", state.ssid)
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 20.dp),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-            )
+            CredentialDivider()
             CredentialRow("密码", state.password)
+            CredentialDivider()
+            CredentialRow("开启时间", clockText(state.startedAt))
+            CredentialDivider()
+            CredentialRow("已开启", elapsedText(now - state.startedAt))
+            if (address != null) {
+                CredentialDivider()
+                CredentialRow("本机地址", address)
+            }
         }
     }
     Spacer(Modifier.height(20.dp))
     OutlinedButton(onClick = onStop) { Text("关闭热点") }
+}
+
+@Composable
+private fun CredentialDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 20.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    )
+}
+
+private fun clockText(timestamp: Long): String =
+    SimpleDateFormat("HH:mm:ss", Locale.CHINA).apply {
+        timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+    }.format(Date(timestamp))
+
+private fun elapsedText(millis: Long): String {
+    val total = (millis.coerceAtLeast(0) / 1000).toInt()
+    return String.format(
+        Locale.CHINA,
+        "%02d:%02d:%02d",
+        total / 3600,
+        total % 3600 / 60,
+        total % 60
+    )
 }
 
 @Composable
@@ -249,7 +306,7 @@ private fun CredentialRow(label: String, value: String) {
             text = label,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(56.dp)
+            modifier = Modifier.width(64.dp)
         )
         Text(
             text = value,

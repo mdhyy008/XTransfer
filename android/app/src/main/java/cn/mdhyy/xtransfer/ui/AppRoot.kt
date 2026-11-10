@@ -71,8 +71,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import cn.mdhyy.xtransfer.XlanApp
+import cn.mdhyy.xtransfer.data.BLE_CONVERSATION_PREFIX
+import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.PUBLIC_CONVERSATION_ID
+import cn.mdhyy.xtransfer.data.RELAY_CONVERSATION_PREFIX
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.service.XlanService
 import java.io.File
@@ -119,18 +122,23 @@ fun AppRoot(
     val bucketFailed by repo.bucketFailed.collectAsStateWithLifecycle()
     val recvDirPath by repo.recvDirPath.collectAsStateWithLifecycle()
     val lan by repo.lan.collectAsStateWithLifecycle()
-    val offline = lan.known && lan.info == null
+    val lanMissing = lan.known && lan.info == null
     // 没网时那层模糊提示点一下就能收掉；网络回来后重新计。
     var offlineDismissed by remember { mutableStateOf(false) }
-    LaunchedEffect(offline) {
-        if (!offline) offlineDismissed = false
-    }
-    val offlineActive = offline && !offlineDismissed
 
     var bucketOpen by remember { mutableStateOf(false) }
     // 预览页同一时间只留一个，连点文件时不会叠出好几层。
     var lastMediaNavAt by remember { mutableLongStateOf(0L) }
     val xlanApp = context.applicationContext as XlanApp
+    val hotspotState by xlanApp.hotspot.state.collectAsStateWithLifecycle()
+    // 热点开着时本机有自己的网段，对端能连上，不算断网。
+    val hotspotLinkActive = hotspotState is HotspotState.Running ||
+        hotspotState is HotspotState.Starting
+    val offline = lanMissing && !hotspotLinkActive
+    LaunchedEffect(offline) {
+        if (!offline) offlineDismissed = false
+    }
+    val offlineActive = offline && !offlineDismissed
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
@@ -285,7 +293,7 @@ fun AppRoot(
                             muted = settings.muted,
                             pinned = settings.pinned,
                             peakSpeeds = peakSpeeds,
-                            lanOffline = offlineActive,
+                            lanOffline = offline,
                             scope = scope,
                             onOpenConv = { id -> nav.navigate("detail/${Uri.encode(id)}") },
                             onOpenSettings = { nav.navigate("settings") },
@@ -293,6 +301,7 @@ fun AppRoot(
                             hotspot = xlanApp.hotspot,
                             wifiDirect = xlanApp.wifiDirect,
                             ble = xlanApp.ble,
+                            relay = xlanApp.relay,
                             onOpenHotspot = { nav.navigate("hotspot") },
                             onOpenWifiDirect = { nav.navigate("wifidirect") }
                         )
@@ -478,8 +487,16 @@ fun AppRoot(
         }
     }
 
-    // 没网时整页都是模糊的，点一下就把它收掉。
-    if (offlineActive) {
+    val entry by nav.currentBackStackEntryAsState()
+    // 只有真正显示离线模糊层的页面才需要这层点击收掉；热点、Wi-Fi Direct 等页面没有模糊层，
+    // 留着这层会吞掉进入页面后的第一次点击。
+    val route = entry?.destination?.route
+    val detailId = entry?.arguments?.getString("id").orEmpty()
+    val offlineBlurPage = route == "settings" ||
+        (route == "detail/{id}" &&
+            !detailId.startsWith(BLE_CONVERSATION_PREFIX) &&
+            !detailId.startsWith(RELAY_CONVERSATION_PREFIX))
+    if (offlineActive && offlineBlurPage) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -562,7 +579,6 @@ fun AppRoot(
         }
     }
 
-    val entry by nav.currentBackStackEntryAsState()
     val onList = entry?.destination?.route == "list"
     var lastBack by remember { mutableLongStateOf(0L) }
     BackHandler(enabled = onList && !bucketOpen) {

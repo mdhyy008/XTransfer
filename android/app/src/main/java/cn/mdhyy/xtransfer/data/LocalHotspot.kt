@@ -3,6 +3,7 @@ package cn.mdhyy.xtransfer.data
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.wifi.SoftApConfiguration
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -11,15 +12,23 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.net.Inet4Address
+import java.net.NetworkInterface
+
+private const val HOTSPOT_PASSWORD = "33554488"
 
 sealed interface HotspotState {
     data object Idle : HotspotState
     data object Starting : HotspotState
-    data class Running(val ssid: String, val password: String) : HotspotState
+    data class Running(
+        val ssid: String,
+        val password: String,
+        val startedAt: Long = System.currentTimeMillis()
+    ) : HotspotState
     data class Failed(val message: String) : HotspotState
 }
 
-/** 用系统的临时热点（LocalOnlyHotspot）开一个不接外网的热点，凭据由系统分配。 */
+/** 用系统的临时热点（LocalOnlyHotspot）开一个不接外网的热点。 */
 class LocalHotspot(context: Context) {
     private val appContext = context.applicationContext
     private val wifi = appContext.getSystemService(WifiManager::class.java)
@@ -55,8 +64,7 @@ class LocalHotspot(context: Context) {
             return
         }
         _state.value = HotspotState.Starting
-        runCatching {
-            wifi.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
+        val callback = object : WifiManager.LocalOnlyHotspotCallback() {
                 override fun onStarted(res: WifiManager.LocalOnlyHotspotReservation) {
                     reservation = res
                     val (ssid, password) = credentials(res)
@@ -78,7 +86,20 @@ class LocalHotspot(context: Context) {
                     reservation = null
                     _state.value = HotspotState.Failed(describe(reason))
                 }
-            }, handler)
+            }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val config = SoftApConfiguration.Builder()
+                    .setPassphrase(HOTSPOT_PASSWORD, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
+                    .build()
+                wifi.startLocalOnlyHotspotWithConfiguration(
+                    config,
+                    appContext.mainExecutor,
+                    callback
+                )
+            } else {
+                wifi.startLocalOnlyHotspot(callback, handler)
+            }
         }.onFailure {
             _state.value = HotspotState.Failed(it.message ?: "热点开启失败")
         }
@@ -88,6 +109,36 @@ class LocalHotspot(context: Context) {
         runCatching { reservation?.close() }
         reservation = null
         _state.value = HotspotState.Idle
+    }
+
+    /**
+     * 热点开着的本机地址。热点的网卡不会出现在 ConnectivityManager 的网络列表里，
+     * 只能从 NetworkInterface 里按无线/热点网卡名找 IPv4。
+     */
+    fun linkAddress(): Pair<String, Int>? {
+        if (_state.value !is HotspotState.Running) return null
+        return runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                .asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .filter {
+                    val name = it.name.lowercase()
+                    name.startsWith("wlan") || name.startsWith("ap") ||
+                        name.startsWith("softap") || name.startsWith("eth")
+                }
+                .flatMap { it.interfaceAddresses.asSequence() }
+                .firstNotNullOfOrNull { address ->
+                    val ip = address.address
+                    val host = ip.hostAddress
+                    if (ip is Inet4Address && !ip.isLoopbackAddress &&
+                        !ip.isLinkLocalAddress && host != null
+                    ) {
+                        host to address.networkPrefixLength.toInt()
+                    } else {
+                        null
+                    }
+                }
+        }.getOrNull()
     }
 
     private fun credentials(res: WifiManager.LocalOnlyHotspotReservation): Pair<String, String> =

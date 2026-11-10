@@ -270,6 +270,14 @@ class Repository(
         }
     }
 
+    @Volatile
+    var relay: RelayManager? = null
+        private set
+
+    fun attachRelay(manager: RelayManager) {
+        relay = manager
+    }
+
     val dataDir: File get() = app.filesDir
 
     private val _recvDirPath = MutableStateFlow(
@@ -874,6 +882,11 @@ class Repository(
     // ---------- 发文本 / 决策 / 已读 / 信任 ----------
 
     suspend fun sendText(to: String, body: String) {
+        if (to.startsWith(RELAY_CONVERSATION_PREFIX)) {
+            val manager = relay ?: throw IllegalStateException("公网聊天室未连接")
+            manager.sendText(to.removePrefix(RELAY_CONVERSATION_PREFIX), body)
+            return
+        }
         if (to.startsWith(BLE_CONVERSATION_PREFIX)) {
             sendBleText(to.removePrefix(BLE_CONVERSATION_PREFIX), body)
             return
@@ -1180,6 +1193,39 @@ class Repository(
         }
     }
 
+    /** 公网聊天室选中的文件：先落到缓存（content:// 也能重试/打开），再逐个上传。 */
+    private suspend fun sendRelayFiles(convId: String, items: List<BucketItem>) {
+        val manager = relay ?: throw IllegalStateException("公网聊天室未连接")
+        val roomId = convId.removePrefix(RELAY_CONVERSATION_PREFIX)
+        val limit = manager.state.value.maxFileSize
+        for (item in items) {
+            if (item.kind == "folder") throw IllegalStateException("公网聊天室不支持发送文件夹")
+            val name = safeFileName(item.name.ifBlank { "文件" })
+            if (limit > 0 && item.size > limit) {
+                throw IllegalStateException("「$name」超过 ${limit / 1024 / 1024} MB")
+            }
+            val file = withContext(Dispatchers.IO) {
+                val uriText = item.uri
+                if (uriText.startsWith("content://")) {
+                    val dir = File(app.cacheDir, "relay-out").apply { mkdirs() }
+                    val target = uniqueFile(dir, name)
+                    val input = app.contentResolver.openInputStream(Uri.parse(uriText))
+                        ?: throw IllegalStateException("无法读取「$name」")
+                    input.use { source ->
+                        target.outputStream().use { sink -> source.copyTo(sink) }
+                    }
+                    target
+                } else {
+                    val path = if (uriText.startsWith("file://")) Uri.parse(uriText).path else uriText
+                    File(path ?: throw IllegalStateException("无法读取「$name」"))
+                        .takeIf { it.isFile }
+                        ?: throw IllegalStateException("无法读取「$name」")
+                }
+            }
+            manager.sendFile(roomId, file.absolutePath, name, file.length())
+        }
+    }
+
     private fun readBucketBytes(item: BucketItem): ByteArray? = runCatching {
         val uriText = item.uri
         if (uriText.startsWith("content://")) {
@@ -1301,6 +1347,7 @@ class Repository(
         val ids = db.messageDao().idsByConversation(convId)
         db.messageDao().deleteByConversation(convId)
         db.conversationDao().resetLastMessage(convId)
+        if (convId.startsWith(RELAY_CONVERSATION_PREFIX)) return
         if (convId == PUBLIC_CONVERSATION_ID) {
             // 服务端也清掉公共频道历史并记下时间点，之后补齐不再拉回旧消息。
             api?.let { current ->
@@ -1315,6 +1362,17 @@ class Repository(
 
     suspend fun deleteConversation(id: String) {
         if (id == PUBLIC_CONVERSATION_ID) return
+        if (id.startsWith(RELAY_CONVERSATION_PREFIX)) {
+            db.messageDao().deleteByConversation(id)
+            db.conversationDao().delete(id)
+            val current = settings.value
+            settingsStore.update(
+                muted = current.muted - id,
+                pinned = current.pinned - id,
+                aliases = current.aliases - id
+            )
+            return
+        }
         val ids = db.messageDao().idsByConversation(id)
         db.messageDao().deleteByConversation(id)
         db.conversationDao().delete(id)
@@ -1342,7 +1400,9 @@ class Repository(
         }
         val ids = LinkedHashSet<String>()
         conversations.value.forEach {
-            if (it.id != PUBLIC_CONVERSATION_ID && !it.online && !alreadyHidden(it.id)) ids += it.id
+            val keep = it.id == PUBLIC_CONVERSATION_ID ||
+                it.id.startsWith(RELAY_CONVERSATION_PREFIX)
+            if (!keep && !it.online && !alreadyHidden(it.id)) ids += it.id
         }
         _peers.value.forEach {
             if (nowSec - it.lastSeen > ONLINE_WINDOW_SEC && !alreadyHidden(it.id)) ids += it.id
@@ -1500,6 +1560,7 @@ class Repository(
         if (trimmed.isEmpty()) throw IllegalStateException("设备名不能为空")
         XlanConfig.setDeviceName(app.filesDir, trimmed)
         XlanService.restart(app)
+        relay?.refreshProfile()
     }
 
     suspend fun cleanCache(): CacheCleanResult {
@@ -1570,6 +1631,12 @@ class Repository(
 
     fun sendBucket(peerId: String, items: List<BucketItem>): Boolean {
         if (items.isEmpty()) return false
+        if (peerId.startsWith(RELAY_CONVERSATION_PREFIX)) {
+            scope.launch { runCatching { sendRelayFiles(peerId, items) } }
+            // 文件已经交给发送队列，暂存桶随即清空。
+            clearBucket()
+            return true
+        }
         if (peerId.startsWith(BLE_CONVERSATION_PREFIX)) {
             scope.launch { runCatching { sendBleFiles(peerId, items) } }
             // 文件已经交给发送队列，暂存桶随即清空。
@@ -1585,6 +1652,8 @@ class Repository(
 
     fun cancelSend(messageId: String) {
         val message = messages.value.firstOrNull { it.id == messageId }
+        // 公网消息已经在发送或等待服务器确认，取消交给确认超时收口。
+        if (message?.channel == "relay") return
         if (message?.channel == "ble") {
             ble?.cancelFile(messageId)
             scope.launch { db.messageDao().setStatus(messageId, "canceled", null, now()) }
@@ -1594,6 +1663,10 @@ class Repository(
     }
 
     suspend fun retrySend(message: MessageEntity) {
+        if (message.conversationId.startsWith(RELAY_CONVERSATION_PREFIX)) {
+            retryRelay(message)
+            return
+        }
         if (message.kind == "text") {
             retryText(message)
             return
@@ -1603,6 +1676,25 @@ class Repository(
             return
         }
         sender.retry(message)
+    }
+
+    // 中继没有断点续传，重试就是删掉旧记录、换新编号重发一遍。
+    private suspend fun retryRelay(message: MessageEntity) {
+        val manager = relay ?: throw IllegalStateException("公网聊天室未连接")
+        val roomId = message.conversationId.removePrefix(RELAY_CONVERSATION_PREFIX)
+        if (message.kind == "text") {
+            val body = message.body?.trim().orEmpty()
+            if (body.isEmpty()) return
+            db.messageDao().delete(message.id)
+            manager.sendText(roomId, body)
+            return
+        }
+        val path = message.localPath ?: throw IllegalStateException("文件不存在")
+        val file = File(path)
+        if (!file.isFile) throw IllegalStateException("文件不存在")
+        val name = message.fileName?.takeIf { it.isNotBlank() } ?: file.name
+        db.messageDao().delete(message.id)
+        manager.sendFile(roomId, file.absolutePath, name, file.length())
     }
 
     private suspend fun retryBleFile(message: MessageEntity) {
@@ -1678,6 +1770,40 @@ class Repository(
                 dao.rename(id, name)
             }
         }
+    }
+
+    // ---------- 公网聊天室 ----------
+
+    suspend fun createRelayRoom(name: String): String =
+        relay?.createRoom(name) ?: throw IllegalStateException("公网聊天室未连接")
+
+    suspend fun joinRelayRoom(code: String): String =
+        relay?.joinRoom(code) ?: throw IllegalStateException("公网聊天室未连接")
+
+    fun leaveRelayRoom(roomId: String) {
+        relay?.leaveRoom(roomId)
+    }
+
+    fun requestRelayMembers(roomId: String) {
+        relay?.requestMembers(roomId)
+    }
+
+    fun relayKick(roomId: String, deviceId: String) {
+        relay?.kick(roomId, deviceId)
+    }
+
+    fun relayRename(roomId: String, name: String) {
+        relay?.rename(roomId, name)
+    }
+
+    suspend fun relayCacheFile(message: MessageEntity): File =
+        relay?.cacheFile(message) ?: throw IllegalStateException("公网聊天室未连接")
+
+    suspend fun relaySaveFile(message: MessageEntity): File =
+        relay?.saveFile(message) ?: throw IllegalStateException("公网聊天室未连接")
+
+    fun relayRecall(roomId: String, messageId: String) {
+        relay?.recall(roomId, messageId)
     }
 
     private suspend fun ensureConversationNow(id: String, name: String) {

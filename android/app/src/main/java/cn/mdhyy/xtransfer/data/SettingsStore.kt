@@ -17,6 +17,7 @@ data class AppSettings(
     val enterToSend: Boolean = false,
     val misans: Boolean = true,
     val webChat: Boolean = false,
+    val relayUrl: String = "",
     val blocked: Set<String> = emptySet(),
     val aliases: Map<String, String> = emptyMap(),
     val muted: Set<String> = emptySet(),
@@ -37,6 +38,7 @@ class SettingsStore(context: Context) {
             enterToSend = prefs.getBoolean("enterToSend", false),
             misans = prefs.getBoolean("misans", true),
             webChat = prefs.getBoolean("webChat", false),
+            relayUrl = prefs.getString("relayUrl", "") ?: "",
             blocked = prefs.getStringSet("blocked", emptySet()) ?: emptySet(),
             aliases = readAliases(prefs.getString("aliases", null)),
             muted = prefs.getStringSet("muted", emptySet()) ?: emptySet(),
@@ -55,6 +57,7 @@ class SettingsStore(context: Context) {
         enterToSend: Boolean? = null,
         misans: Boolean? = null,
         webChat: Boolean? = null,
+        relayUrl: String? = null,
         blocked: Set<String>? = null,
         aliases: Map<String, String>? = null,
         muted: Set<String>? = null,
@@ -71,6 +74,7 @@ class SettingsStore(context: Context) {
             enterToSend = enterToSend ?: current.enterToSend,
             misans = misans ?: current.misans,
             webChat = webChat ?: current.webChat,
+            relayUrl = relayUrl ?: current.relayUrl,
             blocked = blocked ?: current.blocked,
             aliases = aliases ?: current.aliases,
             muted = muted ?: current.muted,
@@ -86,6 +90,7 @@ class SettingsStore(context: Context) {
             .putBoolean("enterToSend", next.enterToSend)
             .putBoolean("misans", next.misans)
             .putBoolean("webChat", next.webChat)
+            .putString("relayUrl", next.relayUrl)
             .putStringSet("blocked", next.blocked)
             .putString("aliases", JSONObject(next.aliases).toString())
             .putStringSet("muted", next.muted)
