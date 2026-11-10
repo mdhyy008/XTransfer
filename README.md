@@ -48,6 +48,10 @@
 
 ![内网分发](docs/screenshots/desktop-share.jpg)
 
+## 公网聊天中继
+
+公网聊天需要一台中继服务器，部署步骤见 [公网聊天中继部署](docs/%E5%85%AC%E7%BD%91%E8%81%8A%E5%A4%A9%E4%B8%AD%E7%BB%A7%E9%83%A8%E7%BD%B2.md)。
+
 ## 技术栈
 
 | 部分 | 技术 |
