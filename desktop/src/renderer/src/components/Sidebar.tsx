@@ -88,8 +88,8 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
             width: 40,
             height: 40,
             borderRadius: '14px',
-            bgcolor: 'secondary.main',
-            color: 'secondary.contrastText'
+            bgcolor: relayRoom ? 'primary.main' : 'secondary.main',
+            color: relayRoom ? 'primary.contrastText' : 'secondary.contrastText'
           }}
         >
           {relayRoom ? <PublicRounded fontSize="small" /> : <ForumRounded fontSize="small" />}
@@ -389,6 +389,7 @@ export default function Sidebar({
   const [pendingClear, setPendingClear] = useState<Conversation | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const [pendingInfo, setPendingInfo] = useState<Conversation | null>(null)
+  const [roomInfoTarget, setRoomInfoTarget] = useState<Conversation | null>(null)
   const [aliasTarget, setAliasTarget] = useState<Conversation | null>(null)
   const [aliasDraft, setAliasDraft] = useState('')
   const [testing, setTesting] = useState<string | null>(null)
@@ -409,6 +410,26 @@ export default function Sidebar({
   const clearShown = useRetained(pendingClear)
   const deleteShown = useRetained(pendingDelete)
   const infoShown = useRetained(pendingInfo)
+  const roomInfoShown = useRetained(roomInfoTarget)
+  const roomInfoRoomId = roomInfoShown?.id.startsWith(RELAY_PREFIX)
+    ? roomInfoShown.id.slice(RELAY_PREFIX.length)
+    : ''
+  const roomInfoRoom = (relay?.rooms ?? []).find((room) => room.id === roomInfoRoomId)
+  const roomInfoCreator = roomInfoRoom?.creator ?? ''
+  const roomInfoCreatorName =
+    roomInfoCreator === ''
+      ? '—'
+      : roomInfoCreator === relay?.deviceId
+        ? '我'
+        : (relay?.members ?? {})[roomInfoRoomId]?.find(
+            (member) => member.deviceId === roomInfoCreator
+          )?.name || roomInfoCreator
+  const roomInfoRows = [
+    { label: '房间名', value: roomInfoRoom?.name || roomInfoShown?.name || '—' },
+    { label: '房间号', value: roomInfoRoom?.code || '—' },
+    { label: '群主', value: roomInfoCreatorName },
+    { label: '成员数', value: String(roomInfoRoom?.memberCount ?? 0) }
+  ]
   const lastByConv = useMemo(() => lastMessageMap(messages), [messages])
   const addrById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer.addr ?? ''])),
@@ -606,6 +627,7 @@ export default function Sidebar({
   const searching = query.trim() !== ''
 
   const bleRows = useMemo(() => {
+    if (bluetooth?.on !== true) return []
     const map = new Map<
       string,
       {
@@ -645,9 +667,9 @@ export default function Sidebar({
     return [...map.values()].sort(
       (a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name)
     )
-  }, [conversations, lastByConv, bluetooth?.devices, aliases])
+  }, [conversations, lastByConv, bluetooth?.on, bluetooth?.devices, aliases])
 
-  const hasBleDevices = (bluetooth?.devices.length ?? 0) > 0
+  const hasBleDevices = bluetooth?.on === true && (bluetooth?.devices.length ?? 0) > 0
   const bleKeyword = query.trim().toLowerCase()
   const shownBleRows = bleKeyword
     ? bleRows.filter(
@@ -902,7 +924,7 @@ export default function Sidebar({
                   ))}
               </Section>
             )}
-            {(relay?.connected || relayRows.length > 0) && (
+            {relay?.connected === true && (
               <Section
                 title="公网"
                 action={
@@ -935,11 +957,12 @@ export default function Sidebar({
               </Section>
             )}
             {hasBleDevices && normalBleRows.length > 0 && bleList(normalBleRows)}
-            {dms.length === 0 && !hasBleDevices && relayRows.length === 0 && (
-              <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
-                暂无设备
-              </Typography>
-            )}
+            {dms.length === 0 && pinnedBleRows.length === 0 && normalBleRows.length === 0 &&
+              relay?.connected !== true && (
+                <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
+                  暂无设备
+                </Typography>
+              )}
           </>
         )}
       </Box>
@@ -961,6 +984,15 @@ export default function Sidebar({
       >
         {menuIsRelay ? (
           <>
+            <MenuItem
+              onClick={() => {
+                setRoomInfoTarget(menu?.conv ?? null)
+                setMenu(null)
+              }}
+            >
+              查看房间信息
+            </MenuItem>
+            <Divider />
             <MenuItem
               onClick={() => {
                 setPendingClear(menu?.conv ?? null)
@@ -1173,6 +1205,25 @@ export default function Sidebar({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPendingInfo(null)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={roomInfoTarget !== null} onClose={() => setRoomInfoTarget(null)}>
+        <DialogTitle>房间信息</DialogTitle>
+        <DialogContent sx={{ minWidth: 320 }}>
+          {roomInfoRows.map((row) => (
+            <Box key={row.label} sx={{ display: 'flex', gap: 2, py: 0.5 }}>
+              <Typography sx={{ width: 72, flexShrink: 0, fontSize: 13, color: 'text.secondary' }}>
+                {row.label}
+              </Typography>
+              <Typography sx={{ flex: 1, fontSize: 13, wordBreak: 'break-all' }}>
+                {row.value}
+              </Typography>
+            </Box>
+          ))}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoomInfoTarget(null)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

@@ -9,6 +9,11 @@ const FONT =
 
 const ACCENT = '#D0BCFF'
 
+// 拖拽窗口时浏览器也会派发 drag 事件，但 types 里没有 Files。
+function isFileDrag(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+
 function Zone({
   icon,
   label,
@@ -28,6 +33,7 @@ function Zone({
     <div
       onDragEnter={(event) => {
         event.preventDefault()
+        if (!isFileDrag(event)) return
         onEnter()
       }}
       onDragLeave={() => onLeave()}
@@ -82,6 +88,7 @@ export default function DropPad() {
 
   const onEnter = (event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
+    if (!isFileDrag(event)) return
     if (leaveTimer.current !== undefined) {
       window.clearTimeout(leaveTimer.current)
       leaveTimer.current = undefined
@@ -102,6 +109,7 @@ export default function DropPad() {
 
   const onOver = (event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
+    if (!isFileDrag(event)) return
     event.dataTransfer.dropEffect = 'copy'
     if (leaveTimer.current !== undefined) {
       window.clearTimeout(leaveTimer.current)

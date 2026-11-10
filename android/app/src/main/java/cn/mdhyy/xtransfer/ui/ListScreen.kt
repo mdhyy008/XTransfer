@@ -46,6 +46,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Devices
@@ -324,11 +325,12 @@ fun ListScreen(
     }
 
     // 蓝牙行也要吃置顶：置顶的进「置顶」分组，其余留在「蓝牙设备」。
-    val bleDeviceRows = bleState.devices.map { bleConvFor(it) to it }
+    // 蓝牙关着时整组隐藏，连置顶里的旧蓝牙会话也一并收起。
+    val bleDeviceRows = if (bleState.on) bleState.devices.map { bleConvFor(it) to it } else emptyList()
     val pinnedBleDeviceRows = bleDeviceRows.filter { it.first.id in pinned }
     val normalBleDeviceRows = bleDeviceRows.filter { it.first.id !in pinned }
-    val pinnedBlePending = blePending.filter { it.id in pinned }
-    val normalBlePending = blePending.filter { it.id !in pinned }
+    val pinnedBlePending = if (bleState.on) blePending.filter { it.id in pinned } else emptyList()
+    val normalBlePending = if (bleState.on) blePending.filter { it.id !in pinned } else emptyList()
     // 公共频道不固定第一位，和局域网设备一起按在线、最近消息排。
     val lanConvs = (listOf(publicConv) + online + offline)
         .sortedWith(
@@ -741,7 +743,7 @@ fun ListScreen(
                     }
                 )
             }
-            if (relayState.connected || relayRows.isNotEmpty()) {
+            if (relayState.connected) {
                 item(key = "relay-label") {
                     SectionLabelWithAction(text = "公网") {
                         IconButton(
@@ -793,7 +795,9 @@ fun ListScreen(
             }
             if (online.isEmpty() && offline.isEmpty() && pinnedDevices.isEmpty() &&
                 direct.devices.isEmpty() && !direct.connected &&
-                bleState.devices.isEmpty() && blePending.isEmpty() && relayRows.isEmpty()
+                normalBleDeviceRows.isEmpty() && normalBlePending.isEmpty() &&
+                pinnedBleDeviceRows.isEmpty() && pinnedBlePending.isEmpty() &&
+                !relayState.connected
             ) {
                 item(key = "empty") {
                     EmptyDevices()
@@ -1393,7 +1397,7 @@ private fun ConversationRow(
         AvatarIcon(
             icon = when {
                 isRelay -> if (isRelayPublic) Icons.Rounded.Public else Icons.Rounded.Forum
-                isPublic -> Icons.Rounded.Public
+                isPublic -> Icons.Rounded.Campaign
                 conv.id.startsWith(BLE_CONVERSATION_PREFIX) -> Icons.Rounded.Bluetooth
                 else -> platformIcon(conv.platform)
             },

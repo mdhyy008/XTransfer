@@ -272,7 +272,7 @@ class RelayManager(
     }
 
     fun requestMembers(roomId: String) {
-        if (roomId.isEmpty()) return
+        if (roomId.isEmpty() || ws == null || !connected) return
         send(JSONObject().put("type", "members").put("room", roomId))
     }
 

@@ -266,11 +266,15 @@ fun DetailScreen(
     LaunchedEffect(convId) {
         repo.ensureConversation(convId, titleName)
         if (isPublic) repo.syncPublicHistory()
-        if (isRelay) repo.requestRelayMembers(relayRoomId)
+        if (isRelay) runCatching { repo.requestRelayMembers(relayRoomId) }
         if (isBle && !bleManager.isConnected(blePeerId)) bleManager.connect(blePeerId)
         searchOpen = false
         searchQuery = ""
         aliasOpen = false
+    }
+    // 进房间时中继可能还没连上，连上后补拉一次成员列表。
+    LaunchedEffect(convId, relayConnected) {
+        if (isRelay && relayConnected) runCatching { repo.requestRelayMembers(relayRoomId) }
     }
     // 之前误把会话 id 写成了名字的，扫到设备名后纠正回来。
     LaunchedEffect(convId, bleDeviceName) {
@@ -329,6 +333,7 @@ fun DetailScreen(
     var viewConfirm by remember { mutableStateOf<MessageEntity?>(null) }
     var errorTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var membersOpen by remember { mutableStateOf(false) }
+    var roomInfoOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf("") }
     var leaveOpen by remember { mutableStateOf(false) }
@@ -694,6 +699,14 @@ fun DetailScreen(
                     ) {
                         if (isRelay && relayPublic) {
                             DropdownMenuItem(
+                                text = { Text("查看房间信息") },
+                                onClick = {
+                                    menuOpen = false
+                                    roomInfoOpen = true
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
                                 text = { Text("允许通知") },
                                 // 开关项点文字、点开关都只切换状态，都不关菜单。
                                 onClick = { onSetPublicNotify(!publicNotify) },
@@ -712,6 +725,14 @@ fun DetailScreen(
                                 }
                             )
                         } else if (isRelay) {
+                            DropdownMenuItem(
+                                text = { Text("查看房间信息") },
+                                onClick = {
+                                    menuOpen = false
+                                    roomInfoOpen = true
+                                }
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("免打扰") },
                                 // 开关项点文字、点开关都只切换状态，都不关菜单。
@@ -1410,6 +1431,53 @@ fun DetailScreen(
             },
             confirmButton = {
                 TextButton(onClick = { membersOpen = false }) { Text("关闭") }
+            }
+        )
+    }
+
+    if (roomInfoOpen) {
+        AlertDialog(
+            onDismissRequest = { roomInfoOpen = false },
+            title = { Text("房间信息") },
+            text = {
+                Column {
+                    val creatorName = relayRoom?.creator.orEmpty()
+                    val creatorText = when {
+                        creatorName.isBlank() -> "—"
+                        creatorName == relayState.deviceId -> "我"
+                        else -> relayMembers.firstOrNull { it.deviceId == creatorName }?.name
+                            ?.takeIf { it.isNotBlank() } ?: creatorName
+                    }
+                    val rows = listOf(
+                        "房间名" to (relayRoom?.name?.takeIf { it.isNotBlank() } ?: titleName),
+                        "房间号" to (relayRoom?.code?.takeIf { it.isNotBlank() } ?: "—"),
+                        "群主" to creatorText,
+                        "成员数" to (relayRoom?.memberCount ?: relayMembers.size).toString()
+                    )
+                    rows.forEach { (label, value) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                modifier = Modifier.width(72.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = value,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { roomInfoOpen = false }) { Text("关闭") }
             }
         )
     }

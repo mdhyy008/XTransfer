@@ -622,6 +622,7 @@ export default function ChatPane({
   const [webStatus, setWebStatus] = useState<WebChatStatus | null>(null)
   const [webQr, setWebQr] = useState('')
   const [membersOpen, setMembersOpen] = useState(false)
+  const [roomInfoOpen, setRoomInfoOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [leaveOpen, setLeaveOpen] = useState(false)
@@ -658,6 +659,7 @@ export default function ChatPane({
     setSearchQuery('')
     setAliasOpen(false)
     setMembersOpen(false)
+    setRoomInfoOpen(false)
     setRenameOpen(false)
     setLeaveOpen(false)
   }, [conv.id])
@@ -736,7 +738,21 @@ export default function ChatPane({
   const relayConnected = isRelay && relay?.connected === true
   const relayConnecting = isRelay && relay?.connecting === true
   const relayIsCreator = relayRoom?.creator !== undefined && relayRoom.creator === relay?.deviceId
-  const relayMembers = isRelay ? (relay?.members[relayRoomId] ?? []) : []
+  const relayMembers = isRelay ? ((relay?.members ?? {})[relayRoomId] ?? []) : []
+  const roomInfoCreator = relayRoom?.creator ?? ''
+  const roomInfoCreatorName =
+    roomInfoCreator === ''
+      ? '—'
+      : roomInfoCreator === relay?.deviceId
+        ? '我'
+        : relayMembers.find((member) => member.deviceId === roomInfoCreator)?.name ||
+          roomInfoCreator
+  const roomInfoRows = [
+    { label: '房间名', value: relayRoom?.name || conv.name || '—' },
+    { label: '房间号', value: relayRoom?.code || '—' },
+    { label: '群主', value: roomInfoCreatorName },
+    { label: '成员数', value: String(relayRoom?.memberCount ?? relayMembers.length) }
+  ]
   const transportReady = isBle ? bleConnected : isRelay ? relayConnected : serviceRunning
   const online = isBle
     ? bleConnected
@@ -1248,6 +1264,15 @@ export default function ChatPane({
               {isRelay && !relayPublic ? (
                 <>
                   <MenuItem
+                    onClick={() => {
+                      setTrustAnchor(null)
+                      setRoomInfoOpen(true)
+                    }}
+                  >
+                    查看房间信息
+                  </MenuItem>
+                  <Divider />
+                  <MenuItem
                     sx={{ gap: 2, pr: 1 }}
                     onClick={() => onSetMuted(!muted)}
                   >
@@ -1306,6 +1331,19 @@ export default function ChatPane({
                 </>
               ) : isPublic || relayPublic ? (
                 <>
+                  {relayPublic && (
+                    <>
+                      <MenuItem
+                        onClick={() => {
+                          setTrustAnchor(null)
+                          setRoomInfoOpen(true)
+                        }}
+                      >
+                        查看房间信息
+                      </MenuItem>
+                      <Divider />
+                    </>
+                  )}
                   <MenuItem
                     sx={{ gap: 2, pr: 1 }}
                     // 开关项点文字、点开关都只切换状态，都不关菜单。
@@ -2053,6 +2091,25 @@ export default function ChatPane({
           >
             保存
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={roomInfoOpen} onClose={() => setRoomInfoOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>房间信息</DialogTitle>
+        <DialogContent sx={{ minWidth: 320 }}>
+          {roomInfoRows.map((row) => (
+            <Box key={row.label} sx={{ display: 'flex', gap: 2, py: 0.5 }}>
+              <Typography sx={{ width: 72, flexShrink: 0, fontSize: 13, color: 'text.secondary' }}>
+                {row.label}
+              </Typography>
+              <Typography sx={{ flex: 1, fontSize: 13, wordBreak: 'break-all' }}>
+                {row.value}
+              </Typography>
+            </Box>
+          ))}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoomInfoOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

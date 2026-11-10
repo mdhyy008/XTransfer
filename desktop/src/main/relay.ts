@@ -311,7 +311,8 @@ export class RelayService {
 
   requestMembers(roomId: string): void {
     if (!roomId) return
-    this.send({ type: 'members', room: roomId })
+    // 未连接时静默跳过，成员列表会在连上后重新同步。
+    this.sendSafe({ type: 'members', room: roomId })
   }
 
   // 设备名改了要让服务端和房间里的人看到新名字，重连一次最省事。
