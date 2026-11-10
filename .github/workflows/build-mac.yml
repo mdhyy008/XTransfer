@@ -2,6 +2,10 @@ name: build-mac
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 Release 标签（如 v0.2.1-Beta）'
+        required: true
 
 permissions:
   contents: write
@@ -42,4 +46,5 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload v0.2.1-Beta release/*.zip --clobber
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" release/*.zip --clobber
