@@ -3,6 +3,9 @@ name: build-mac
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15-intel
@@ -34,3 +37,9 @@ jobs:
           name: mac-zip
           path: desktop/release/*.zip
           if-no-files-found: error
+
+      - name: Upload to release
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload v0.2.0-Beta release/*.zip --clobber
