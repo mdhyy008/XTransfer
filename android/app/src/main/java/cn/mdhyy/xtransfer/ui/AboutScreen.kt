@@ -169,7 +169,7 @@ fun AboutScreen(onBack: () -> Unit) {
                             context.startActivity(
                                 Intent(
                                     Intent.ACTION_VIEW,
-                                    Uri.parse("https://github.com/mdhyy008/xlan-client")
+                                    Uri.parse("https://github.com/mdhyy008/XTransfer")
                                 )
                             )
                         }

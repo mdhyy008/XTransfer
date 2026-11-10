@@ -142,6 +142,11 @@ fun SettingsScreen(
     onOpenAbout: () -> Unit
 ) {
     val context = LocalContext.current
+    val appVersion = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+    }
     val pageScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -755,6 +760,7 @@ fun SettingsScreen(
                     SettingRow(
                         icon = Icons.Rounded.Info,
                         title = "关于",
+                        trailingText = appVersion,
                         showChevron = true,
                         onClick = onOpenAbout
                     )

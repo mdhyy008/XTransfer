@@ -57,7 +57,7 @@ import PlatformIcon from './PlatformIcon'
 import { useRetained } from './useRetained'
 
 const OPEN_SOURCE: [string, string, string?][] = [
-  ['X互传', 'MIT', 'https://github.com/mdhyy008/xlan-client'],
+  ['X互传', 'MIT', 'https://github.com/mdhyy008/XTransfer'],
   ['xlan', 'MIT', 'https://github.com/mdhyy008/xlan'],
   ['Electron', 'MIT'],
   ['React', 'MIT'],
@@ -767,7 +767,14 @@ export default function SettingsDialog({
             icon={<InfoRounded fontSize="small" />}
             title="关于"
             onClick={() => setAboutOpen(true)}
-            trailing={<ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />}
+            trailing={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {version.app}
+                </Typography>
+                <ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />
+              </Box>
+            }
           />
         </Section>
 
