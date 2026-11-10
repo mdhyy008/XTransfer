@@ -42,4 +42,4 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload v0.2.0-Beta release/*.zip --clobber
+        run: gh release upload v0.2.1-Beta release/*.zip --clobber
