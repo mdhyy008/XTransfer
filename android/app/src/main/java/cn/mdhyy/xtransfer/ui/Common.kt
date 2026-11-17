@@ -280,7 +280,12 @@ fun LanOfflineBox(
 }
 
 @Composable
-fun AvatarIcon(icon: ImageVector, online: Boolean, orPublic: Boolean = false) {
+fun AvatarIcon(
+    icon: ImageVector,
+    online: Boolean,
+    orPublic: Boolean = false,
+    unknown: Boolean = false
+) {
     val colors = MaterialTheme.colorScheme
     Box(modifier = Modifier.size(44.dp)) {
         Box(
@@ -297,7 +302,7 @@ fun AvatarIcon(icon: ImageVector, online: Boolean, orPublic: Boolean = false) {
                 modifier = Modifier.size(22.dp)
             )
         }
-        if (online) {
+        if (online || unknown) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -310,7 +315,9 @@ fun AvatarIcon(icon: ImageVector, online: Boolean, orPublic: Boolean = false) {
                         .align(Alignment.Center)
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(LocalXtColors.current.success)
+                        .background(
+                            if (unknown) LocalXtColors.current.warning else LocalXtColors.current.success
+                        )
                 )
             }
         }

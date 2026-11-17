@@ -706,6 +706,7 @@ function startLanWatch(): void {
   const tick = (): void => {
     const info = currentLan()
     const key = info ? `${info.name}|${info.cidr}` : ''
+    state.setLan(info !== null)
     if (key === lanKey) return
     lanKey = key
     win?.webContents.send('lan', info)
@@ -2506,6 +2507,7 @@ async function bootstrap(): Promise<void> {
       warning: result.foreign ? '外部 xlan 实例' : undefined
     })
     refreshConfig()
+    state.markServiceStarted()
     await refreshPeers()
     await refreshInbox()
     connectEvents()

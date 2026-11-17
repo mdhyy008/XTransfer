@@ -293,13 +293,13 @@ fun DetailScreen(
         }
     }
     var shownCount by remember(convId) { mutableIntStateOf(messages.size) }
-    val newestIsFile = ordered.firstOrNull()?.let { it.kind != "text" } == true
-    LaunchedEffect(convId, messages.size) {
+    val newest = ordered.firstOrNull()
+    val newestIsFile = newest?.let { it.kind != "text" } == true
+    LaunchedEffect(convId, messages.size, newest?.id, newest?.status) {
         repo.markRead(convId)
-        // 翻历史时不打断；但收发文件要直接跟到底部。
-        if (messages.size > shownCount &&
-            (newestIsFile || listState.firstVisibleItemIndex <= 1)
-        ) {
+        // 翻历史时不打断；收发文件、以及最新的文件传完时都要跟到底部。
+        val added = messages.size > shownCount
+        if ((added && newestIsFile) || listState.firstVisibleItemIndex <= 1) {
             listState.animateScrollToItem(0)
         }
         shownCount = messages.size
@@ -566,6 +566,7 @@ fun DetailScreen(
                         isBle -> bleConnected
                         else -> conv?.online == true
                     }
+                    val unknown = !isRelay && !isBle && conv?.unknown == true
                     if ((isBle && bleConnecting) || (isRelay && relayConnecting)) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(8.dp),
@@ -578,8 +579,14 @@ fun DetailScreen(
                                 .size(7.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (if (isPublic) lanOnline else online) LocalXtColors.current.success
-                                    else MaterialTheme.colorScheme.outline
+                                    when {
+                                        isPublic ->
+                                            if (lanOnline) LocalXtColors.current.success
+                                            else MaterialTheme.colorScheme.outline
+                                        online -> LocalXtColors.current.success
+                                        unknown -> LocalXtColors.current.warning
+                                        else -> MaterialTheme.colorScheme.outline
+                                    }
                                 )
                         )
                     }
@@ -598,6 +605,7 @@ fun DetailScreen(
                                 else -> "未连接"
                             }
                             conv?.online == true -> "在线"
+                            conv?.unknown == true -> "未知"
                             else -> "离线"
                         },
                         style = MaterialTheme.typography.bodySmall,

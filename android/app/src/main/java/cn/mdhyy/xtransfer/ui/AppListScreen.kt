@@ -68,7 +68,7 @@ private data class InstalledApp(
 )
 
 @Composable
-fun AppListScreen(repo: Repository, convId: String, onBack: () -> Unit) {
+fun AppListScreen(repo: Repository, convId: String?, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var apps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
@@ -111,6 +111,11 @@ fun AppListScreen(repo: Repository, convId: String, onBack: () -> Unit) {
                 sending = false
                 when {
                     items.isEmpty() -> context.showError("无法读取所选应用")
+                    convId == null -> {
+                        repo.addBucket(items)
+                        context.toast("已加入暂存桶")
+                        onBack()
+                    }
                     repo.sendBucket(convId, items) -> onBack()
                     else -> context.showError("设备不在线")
                 }

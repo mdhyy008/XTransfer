@@ -55,7 +55,8 @@ data class ConversationUi(
     val unread: Int,
     val createdAt: Long,
     val originalName: String? = null,
-    val addr: String? = null
+    val addr: String? = null,
+    val unknown: Boolean = false
 )
 
 data class ServiceStatus(
@@ -119,6 +120,9 @@ class Repository(
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
     val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
 
+    // 服务会把上次运行留下的 lastSeen 一起带出来，早于这个时刻的心跳不算本次确认过。
+    private var presenceEpoch = now()
+
     private val _service = MutableStateFlow(ServiceStatus())
     val service: StateFlow<ServiceStatus> = _service.asStateFlow()
 
@@ -161,15 +165,21 @@ class Repository(
                 createdAt = c.createdAt
             )
         }
+        val lanPresent = lan.value?.info != null
         for (peer in peers) {
-            val online = now - peer.lastSeen <= ONLINE_WINDOW_SEC
+            val lastSeen = peer.lastSeen
+            val within = now - lastSeen <= ONLINE_WINDOW_SEC
+            val online = within && lastSeen >= presenceEpoch
+            // 启动后还没再听到的设备：有局域网时先当未知，没有局域网就直接算离线。
+            val unknown = within && lastSeen < presenceEpoch && lanPresent
             val existing = merged[peer.id]
             merged[peer.id] = if (existing != null) {
                 existing.copy(
                     name = peer.name.ifBlank { existing.name },
                     platform = peer.platform ?: existing.platform,
                     online = online,
-                    addr = peer.addr ?: existing.addr
+                    addr = peer.addr ?: existing.addr,
+                    unknown = unknown
                 )
             } else {
                 ConversationUi(
@@ -181,7 +191,8 @@ class Repository(
                     lastReadAt = 0,
                     unread = 0,
                     createdAt = 0,
-                    addr = peer.addr
+                    addr = peer.addr,
+                    unknown = unknown
                 )
             }
         }
@@ -314,6 +325,7 @@ class Repository(
     fun onServiceStarted(base: String) {
         val cert = File(app.filesDir, "tls.crt")
         api = LocalApi(base, cert)
+        presenceEpoch = now()
         _restarting.value = false
         _service.value = ServiceStatus(running = true, base = base)
         scope.launch {
@@ -453,6 +465,12 @@ class Repository(
         val current = api ?: return
         val json = withContext(Dispatchers.IO) { current.get("/v1/info") }
         _info.value = DeviceInfo.from(json)
+    }
+
+    // 本次启动后收到过心跳、且还在 12 秒窗口内，才算在线。
+    fun isPeerOnline(peer: Peer): Boolean {
+        val nowSec = now()
+        return peer.lastSeen >= presenceEpoch && nowSec - peer.lastSeen <= ONLINE_WINDOW_SEC
     }
 
     suspend fun refreshPeers() {
@@ -1402,7 +1420,7 @@ class Repository(
         conversations.value.forEach {
             val keep = it.id == PUBLIC_CONVERSATION_ID ||
                 it.id.startsWith(RELAY_CONVERSATION_PREFIX)
-            if (!keep && !it.online && !alreadyHidden(it.id)) ids += it.id
+            if (!keep && !it.online && !it.unknown && !alreadyHidden(it.id)) ids += it.id
         }
         _peers.value.forEach {
             if (nowSec - it.lastSeen > ONLINE_WINDOW_SEC && !alreadyHidden(it.id)) ids += it.id
@@ -1648,6 +1666,13 @@ class Repository(
         // 文件已经交给发送队列，暂存桶随即清空。
         if (started) clearBucket()
         return started
+    }
+
+    // 分享弹窗里直接发出的文件不经过暂存桶，也不动桶里原有的内容。
+    fun sendShared(peerId: String, items: List<BucketItem>): Boolean {
+        if (items.isEmpty()) return false
+        val peer = _peers.value.find { it.id == peerId } ?: return false
+        return sender.send(peer, items)
     }
 
     fun cancelSend(messageId: String) {

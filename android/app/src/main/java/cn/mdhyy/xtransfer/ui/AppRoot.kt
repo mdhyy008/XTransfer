@@ -27,16 +27,19 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.DeviceHub
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -58,11 +61,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -72,6 +75,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import cn.mdhyy.xtransfer.XlanApp
 import cn.mdhyy.xtransfer.data.BLE_CONVERSATION_PREFIX
+import cn.mdhyy.xtransfer.data.BucketItem
 import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.PUBLIC_CONVERSATION_ID
@@ -89,11 +93,14 @@ private data class HomeTab(val label: String, val icon: ImageVector)
 private val HOME_TABS = listOf(
     HomeTab("会话", Icons.Rounded.ChatBubbleOutline),
     HomeTab("文件管理", Icons.Outlined.Folder),
-    HomeTab("内网分发", Icons.Rounded.DeviceHub),
-    HomeTab("小程序", Icons.Rounded.Apps)
+    HomeTab("内网分发", Icons.Rounded.DeviceHub)
 )
 
-data class ShareNotice(val files: Int, val folders: Int)
+data class ShareNotice(
+    val files: Int,
+    val folders: Int,
+    val items: List<BucketItem>
+)
 
 @Composable
 fun AppRoot(
@@ -180,9 +187,6 @@ fun AppRoot(
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia()
-    ) { uris -> addPicked(uris) }
-    val apkPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments()
     ) { uris -> addPicked(uris) }
     val pickBucketFolder = rememberDirectoryPicker { path ->
         val item = repo.makeFolderItem(File(path))
@@ -321,18 +325,8 @@ fun AppRoot(
                             onAddFiles = { filePicker.launch(arrayOf("*/*")) },
                             onAddFolder = { pickBucketFolder() },
                             onAddImages = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            onAddApks = {
-                                apkPicker.launch(arrayOf("application/vnd.android.package-archive"))
-                            },
+                            onAddApks = { nav.navigate("apps") { launchSingleTop = true } },
                             onRemove = { repo.removeBucket(it) }
-                        )
-                    } else {
-                        EmptyState(
-                            icon = Icons.Rounded.Apps,
-                            text = "暂无小程序",
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background)
                         )
                     }
                 }
@@ -413,6 +407,13 @@ fun AppRoot(
                     }
                 },
                 onOpenApps = { nav.navigate("apps/${Uri.encode(id)}") }
+            )
+        }
+        composable("apps") {
+            AppListScreen(
+                repo = repo,
+                convId = null,
+                onBack = { nav.popBackStack() }
             )
         }
         composable(
@@ -524,8 +525,14 @@ fun AppRoot(
 
     val notice = shareNotice
     if (notice != null) {
-        LaunchedEffect(notice) {
-            delay(2000)
+        val selfId = info?.id
+        val targets = peers.filter {
+            it.id != selfId && it.addr != null && repo.isPeerOnline(it)
+        }
+        var sendingTo by remember(notice) { mutableStateOf<String?>(null) }
+        val store = {
+            repo.addBucket(notice.items)
+            context.toast("已加入暂存桶")
             onConsumeShareNotice()
         }
         val parts = buildList {
@@ -533,17 +540,15 @@ fun AppRoot(
             if (notice.folders > 0) add("${notice.folders} 个文件夹")
         }
         Dialog(
-            onDismissRequest = onConsumeShareNotice,
-            properties = DialogProperties(dismissOnClickOutside = true)
+            onDismissRequest = { if (sendingTo == null) store() },
+            properties = DialogProperties(dismissOnClickOutside = sendingTo == null)
         ) {
             Surface(
                 shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.clickable(onClick = onConsumeShareNotice)
+                color = MaterialTheme.colorScheme.surfaceContainerHigh
             ) {
                 Column(
-                    modifier = Modifier
-                        .padding(horizontal = 36.dp, vertical = 28.dp),
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Box(
@@ -562,18 +567,77 @@ fun AppRoot(
                     }
                     Spacer(Modifier.height(18.dp))
                     Text(
-                        text = parts.joinToString("，") + "进入暂存箱",
+                        text = parts.joinToString("，"),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "快去分享给其他设备吧。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
+                    if (targets.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.width(240.dp)
+                        ) {
+                            items(targets, key = { it.id }) { peer ->
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .width(72.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .clickable(enabled = sendingTo == null) {
+                                            sendingTo = peer.id
+                                            scope.launch {
+                                                val sent = repo.sendShared(peer.id, notice.items)
+                                                sendingTo = null
+                                                if (sent) {
+                                                    onConsumeShareNotice()
+                                                    nav.navigate("detail/${Uri.encode(peer.id)}") {
+                                                        launchSingleTop = true
+                                                    }
+                                                } else {
+                                                    repo.addBucket(notice.items)
+                                                    context.showError("设备不在线")
+                                                    onConsumeShareNotice()
+                                                }
+                                            }
+                                        }
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    Box {
+                                        AvatarIcon(
+                                            icon = platformIcon(peer.platform),
+                                            online = true
+                                        )
+                                        if (sendingTo == peer.id) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .matchParentSize()
+                                                    .clip(CircleShape)
+                                                    .background(
+                                                        MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f)
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(20.dp),
+                                                    strokeWidth = 2.dp
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = peer.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

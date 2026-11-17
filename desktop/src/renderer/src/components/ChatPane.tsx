@@ -707,7 +707,10 @@ export default function ChatPane({
 
   useEffect(() => {
     const node = listRef.current
-    if (!node || !stickRef.current) return
+    if (!node) return
+    // 翻历史时不打断；但最后一条是文件时，传完也要跟到底部。
+    const isFile = lastMessage !== undefined && lastMessage.kind !== 'text'
+    if (!stickRef.current && !isFile) return
     node.scrollTop = node.scrollHeight
     // 文件缩略图/卡片渲染后再补一次，保证真正贴到底。
     const raf = requestAnimationFrame(() => {
@@ -761,6 +764,8 @@ export default function ChatPane({
       : conv.id === PUBLIC_CONVERSATION_ID
         ? lanOnline
         : conv.online
+  const unknown =
+    !isBle && !isRelay && conv.id !== PUBLIC_CONVERSATION_ID && conv.unknown === true
   const canSend = transportReady && body.trim() !== '' && !sending
 
   const bleAttemptRef = useRef('')
@@ -1146,7 +1151,11 @@ export default function ChatPane({
                   width: 7,
                   height: 7,
                   borderRadius: '50%',
-                  bgcolor: online ? 'success.main' : 'text.disabled'
+                  bgcolor: online
+                    ? 'success.main'
+                    : unknown
+                      ? 'warning.main'
+                      : 'text.disabled'
                 }}
               />
             )}
@@ -1169,14 +1178,16 @@ export default function ChatPane({
                         : '未连接'
                     : online
                       ? '在线'
-                      : '离线'}
+                      : unknown
+                        ? '未知'
+                        : '离线'}
             </Typography>
             <Box
               onClick={showReconnect && !reconnectBusy ? startReconnect : undefined}
               sx={{
                 height: 20,
                 borderRadius: '6px',
-                bgcolor: online ? 'success.main' : 'action.hover',
+                bgcolor: online ? 'success.main' : unknown ? 'warning.main' : 'action.hover',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1198,15 +1209,36 @@ export default function ChatPane({
               >
                 {isBle ? (
                   <BluetoothRounded
-                    sx={{ fontSize: 13, color: online ? 'success.contrastText' : 'text.disabled' }}
+                    sx={{
+                      fontSize: 13,
+                      color: online
+                        ? 'success.contrastText'
+                        : unknown
+                          ? 'warning.contrastText'
+                          : 'text.disabled'
+                    }}
                   />
                 ) : isRelay ? (
                   <PublicRounded
-                    sx={{ fontSize: 13, color: online ? 'success.contrastText' : 'text.disabled' }}
+                    sx={{
+                      fontSize: 13,
+                      color: online
+                        ? 'success.contrastText'
+                        : unknown
+                          ? 'warning.contrastText'
+                          : 'text.disabled'
+                    }}
                   />
                 ) : (
                   <WifiRounded
-                    sx={{ fontSize: 13, color: online ? 'success.contrastText' : 'text.disabled' }}
+                    sx={{
+                      fontSize: 13,
+                      color: online
+                        ? 'success.contrastText'
+                        : unknown
+                          ? 'warning.contrastText'
+                          : 'text.disabled'
+                    }}
                   />
                 )}
               </Box>

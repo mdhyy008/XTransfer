@@ -1,17 +1,15 @@
 import type { ReactNode } from 'react'
 import { Box, ButtonBase } from '@mui/material'
-import AppsRounded from '@mui/icons-material/AppsRounded'
 import ChatBubbleOutlineRounded from '@mui/icons-material/ChatBubbleOutlineRounded'
 import DeviceHubRounded from '@mui/icons-material/DeviceHubRounded'
 import FolderOutlined from '@mui/icons-material/FolderOutlined'
 
-export type AppPage = 'chat' | 'files' | 'lan' | 'apps'
+export type AppPage = 'chat' | 'files' | 'lan'
 
 const ITEMS: { id: AppPage; label: string; icon: ReactNode }[] = [
   { id: 'chat', label: '会话', icon: <ChatBubbleOutlineRounded fontSize="small" /> },
   { id: 'files', label: '文件管理', icon: <FolderOutlined fontSize="small" /> },
-  { id: 'lan', label: '内网分发', icon: <DeviceHubRounded fontSize="small" /> },
-  { id: 'apps', label: '小程序', icon: <AppsRounded fontSize="small" /> }
+  { id: 'lan', label: '内网分发', icon: <DeviceHubRounded fontSize="small" /> }
 ]
 
 export default function AppNav({

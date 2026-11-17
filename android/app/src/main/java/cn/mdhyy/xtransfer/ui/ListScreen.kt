@@ -54,7 +54,6 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.Public
@@ -142,8 +141,15 @@ private data class DeviceInfoTarget(
     val lastSeen: Long,
     val isBle: Boolean = false,
     val bleAddress: String? = null,
-    val rssi: Int? = null
+    val rssi: Int? = null,
+    val unknown: Boolean = false
 )
+
+private fun statusText(conv: ConversationUi): String = when {
+    conv.online -> "在线"
+    conv.unknown -> "未知"
+    else -> "离线"
+}
 
 @Composable
 fun ListScreen(
@@ -271,7 +277,8 @@ fun ListScreen(
             lastSeen = bleDevice?.lastSeen ?: peer?.lastSeen ?: 0,
             isBle = isBle,
             bleAddress = bleDevice?.address,
-            rssi = bleDevice?.rssi
+            rssi = bleDevice?.rssi,
+            unknown = if (isBle) false else conv.unknown
         )
     }
 
@@ -301,10 +308,14 @@ fun ListScreen(
         .sortedWith(compareByDescending<ConversationUi> { it.lastMessageAt }.thenBy { it.name })
     val rest = devices.filter { it.id !in pinned }
     val online = rest
-        .filter { it.online }
-        .sortedWith(compareByDescending<ConversationUi> { it.lastMessageAt }.thenBy { it.name })
+        .filter { it.online || it.unknown }
+        .sortedWith(
+            compareByDescending<ConversationUi> { it.online }
+                .thenByDescending { it.lastMessageAt }
+                .thenBy { it.name }
+        )
     val offline = rest
-        .filter { !it.online }
+        .filter { !it.online && !it.unknown }
         .sortedWith(compareByDescending<ConversationUi> { it.lastMessageAt }.thenBy { it.name })
 
     fun bleConvFor(device: BleDevice): ConversationUi {
@@ -514,7 +525,7 @@ fun ListScreen(
             items(pinnedDevices, key = { "pin-${it.id}" }) { conv ->
                 ConversationRow(
                     conv = conv,
-                    preview = previewOf(latest[conv.id]).ifBlank { if (conv.online) "在线" else "离线" },
+                    preview = previewOf(latest[conv.id]).ifBlank { statusText(conv) },
                     isPublic = false,
                     blocked = false,
                     muted = conv.id in muted,
@@ -706,7 +717,7 @@ fun ListScreen(
                     preview = if (isPublicConv) {
                         previewOf(latest[PUBLIC_CONVERSATION_ID]).ifBlank { "公共频道" }
                     } else {
-                        previewOf(latest[conv.id]).ifBlank { if (conv.online) "在线" else "离线" }
+                        previewOf(latest[conv.id]).ifBlank { statusText(conv) }
                     },
                     isPublic = isPublicConv,
                     blocked = !isPublicConv && conv.id in blocked,
@@ -783,13 +794,7 @@ fun ListScreen(
                         onSetAlias = {},
                         onClear = { pendingClear = conv },
                         onDelete = {},
-                        onShowInfo = {},
-                        onLeaveRoom = {
-                            scope.launch {
-                                repo.leaveRelayRoom(conv.id.removePrefix(RELAY_CONVERSATION_PREFIX))
-                                context.toast("已退出房间")
-                            }
-                        }
+                        onShowInfo = {}
                     )
                 }
             }
@@ -1248,7 +1253,11 @@ private fun DeviceInfoDialog(
                     if (target.isBle) {
                         if (target.online) "已连接" else "未连接"
                     } else {
-                        if (target.online) "在线" else "离线"
+                        when {
+                            target.online -> "在线"
+                            target.unknown -> "未知"
+                            else -> "离线"
+                        }
                     }
                 )
                 if (!target.addr.isNullOrBlank() && target.port > 0) {
@@ -1371,8 +1380,7 @@ private fun ConversationRow(
     onSetAlias: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
-    onShowInfo: () -> Unit,
-    onLeaveRoom: (() -> Unit)? = null
+    onShowInfo: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -1384,8 +1392,8 @@ private fun ConversationRow(
             .pointerInput(conv.id, isPublic) {
                 detectTapGestures(
                     onTap = { onClick() },
-                    // 局域网广播不弹长按菜单，操作都在聊天页右上角。
-                    onLongPress = if (isPublic) null else { _ ->
+                    // 局域网广播和公网会话不弹长按菜单，操作都在聊天页右上角。
+                    onLongPress = if (isPublic || isRelay) null else { _ ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         menuOpen = true
                     }
@@ -1402,7 +1410,8 @@ private fun ConversationRow(
                 else -> platformIcon(conv.platform)
             },
             online = conv.online,
-            orPublic = isPublic || isRelayPublic
+            orPublic = isPublic || isRelayPublic,
+            unknown = conv.unknown
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -1467,34 +1476,6 @@ private fun ConversationRow(
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
         ) {
-            if (isRelay) {
-                ConvMenuItem(
-                    icon = Icons.Rounded.NotificationsOff,
-                    label = "免打扰",
-                    onClick = { onToggleMute() },
-                    trailing = { Switch(checked = muted, onCheckedChange = { onToggleMute() }) }
-                )
-                MenuDivider()
-                ConvMenuItem(
-                    icon = Icons.Rounded.DeleteSweep,
-                    label = "清空聊天记录",
-                    onClick = {
-                        menuOpen = false
-                        onClear()
-                    }
-                )
-                if (!isRelayPublic && onLeaveRoom != null) {
-                    MenuDivider()
-                    ConvMenuItem(
-                        icon = Icons.Rounded.Logout,
-                        label = "退出房间",
-                        onClick = {
-                            menuOpen = false
-                            onLeaveRoom()
-                        }
-                    )
-                }
-            } else {
             ConvMenuItem(
                 icon = Icons.Rounded.Info,
                 label = "查看设备信息",
@@ -1556,7 +1537,6 @@ private fun ConversationRow(
                         onDelete()
                     }
                 )
-            }
             }
         }
         }

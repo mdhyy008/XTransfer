@@ -16,6 +16,8 @@ import type { Db } from './db'
 // 窗口留到 12 秒才不会因为一次抖动在在线/离线之间反复跳。
 export const ONLINE_WINDOW_SEC = 12
 
+type Presence = 'online' | 'unknown' | 'offline'
+
 export class AppState {
   info: DeviceInfo | null = null
   service: ServiceState = { running: false, base: '', tls: true, foreign: false }
@@ -55,7 +57,10 @@ export class AppState {
     members: {}
   }
   peers = new Map<string, Peer>()
-  private lastOnline = new Map<string, boolean>()
+  private lastPresence = new Map<string, Presence>()
+  // 服务会把上次运行留下的 last_seen 一起带出来，早于这个时刻的心跳不算本次确认过。
+  private presenceEpoch = Date.now() / 1000
+  private lanPresent = false
   onChange: (snapshot: Snapshot) => void = () => {}
 
   constructor(private readonly db: Db) {}
@@ -90,6 +95,17 @@ export class AppState {
     this.emit()
   }
 
+  markServiceStarted(): void {
+    this.presenceEpoch = Date.now() / 1000
+    this.emit()
+  }
+
+  setLan(present: boolean): void {
+    if (this.lanPresent === present) return
+    this.lanPresent = present
+    this.emit()
+  }
+
   upsertPeer(peer: Peer): void {
     if (!peer?.id) return
     if (this.applyPeer(peer)) this.emit()
@@ -114,12 +130,20 @@ export class AppState {
   refreshOnline(): void {
     const nowSec = Date.now() / 1000
     for (const peer of this.peers.values()) {
-      const online = nowSec - (peer.last_seen || 0) <= ONLINE_WINDOW_SEC
-      if (this.lastOnline.get(peer.id) !== online) {
+      if (this.lastPresence.get(peer.id) !== this.presenceOf(peer, nowSec)) {
         this.emit()
         return
       }
     }
+  }
+
+  // 上次运行留下的心跳不能直接当在线：本次启动后还没再听到的设备，
+  // 有局域网时先显示“未知”，没有局域网就直接算离线。
+  private presenceOf(peer: Peer, nowSec: number): Presence {
+    const lastSeen = peer.last_seen || 0
+    if (nowSec - lastSeen > ONLINE_WINDOW_SEC) return 'offline'
+    if (lastSeen >= this.presenceEpoch) return 'online'
+    return this.lanPresent ? 'unknown' : 'offline'
   }
 
   private applyPeer(peer: Peer): boolean {
@@ -128,8 +152,8 @@ export class AppState {
     this.peers.set(peer.id, next)
     const nowSec = Date.now() / 1000
     // 心跳只刷新 last_seen；在线状态没变时不必整包重推，否则每 3 秒全界面重绘一次。
-    const wasOnline = old ? nowSec - (old.last_seen || 0) <= ONLINE_WINDOW_SEC : false
-    const isOnline = nowSec - (next.last_seen || 0) <= ONLINE_WINDOW_SEC
+    const wasPresence = old ? this.presenceOf(old, nowSec) : 'offline'
+    const isPresence = this.presenceOf(next, nowSec)
     return (
       !old ||
       old.name !== next.name ||
@@ -137,7 +161,7 @@ export class AppState {
       old.port !== next.port ||
       old.platform !== next.platform ||
       old.trusted !== next.trusted ||
-      wasOnline !== isOnline
+      wasPresence !== isPresence
     )
   }
 
@@ -146,17 +170,20 @@ export class AppState {
     for (const conv of this.db.listConversations()) merged.set(conv.id, conv)
 
     const nowSec = Date.now() / 1000
-    const onlineNow = new Map<string, boolean>()
+    const presenceNow = new Map<string, Presence>()
     const hidden = this.settings.hidden ?? {}
     for (const peer of this.peers.values()) {
       // 用户删除过的设备，在被重新发现之前不再出现。
       const hiddenAt = hidden[peer.id] ?? 0
       if (hiddenAt > 0 && (peer.last_seen || 0) <= hiddenAt) continue
-      const online = nowSec - (peer.last_seen || 0) <= ONLINE_WINDOW_SEC
-      onlineNow.set(peer.id, online)
+      const presence = this.presenceOf(peer, nowSec)
+      presenceNow.set(peer.id, presence)
+      const online = presence === 'online'
+      const unknown = presence === 'unknown'
       const existing = merged.get(peer.id)
       if (existing) {
         existing.online = online
+        existing.unknown = unknown
         existing.name = peer.name || existing.name
         existing.platform = peer.platform ?? existing.platform
         continue
@@ -166,6 +193,7 @@ export class AppState {
         name: peer.name || peer.id,
         platform: peer.platform,
         online,
+        unknown,
         last_message_at: 0,
         last_read_at: 0,
         unread: 0,
@@ -173,10 +201,13 @@ export class AppState {
       })
     }
 
-    this.lastOnline = onlineNow
+    this.lastPresence = presenceNow
 
     const pub = merged.get(PUBLIC_CONVERSATION_ID)
-    if (pub) pub.online = true
+    if (pub) {
+      pub.online = true
+      pub.unknown = false
+    }
 
     const blocked = new Set(this.settings.blocked ?? [])
     const pinned = new Set(this.settings.pinned ?? [])

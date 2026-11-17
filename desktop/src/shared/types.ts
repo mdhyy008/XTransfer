@@ -65,6 +65,7 @@ export type Conversation = {
   name: string
   platform?: string
   online: boolean
+  unknown?: boolean
   last_message_at: number
   last_read_at: number
   unread: number

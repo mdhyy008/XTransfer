@@ -73,11 +73,11 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
       <Badge
         overlap="circular"
         variant="dot"
-        invisible={!conv.online}
+        invisible={!conv.online && !conv.unknown}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         sx={{
           '& .MuiBadge-badge': {
-            bgcolor: 'success.main',
+            bgcolor: conv.unknown ? 'warning.main' : 'success.main',
             boxShadow: `0 0 0 2px ${theme.palette.background.default}`
           }
         }}
@@ -112,11 +112,11 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
       <Badge
         overlap="circular"
         variant="dot"
-        invisible={!conv.online}
+        invisible={!conv.online && !conv.unknown}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         sx={{
           '& .MuiBadge-badge': {
-            bgcolor: 'success.main',
+            bgcolor: conv.unknown ? 'warning.main' : 'success.main',
             boxShadow: `0 0 0 2px ${theme.palette.background.default}`
           }
         }}
@@ -247,7 +247,13 @@ function ConvRow({
         >
           {previewOf(last) ||
             subtitle ||
-            (conv.id === PUBLIC_CONVERSATION_ID ? '公共频道' : conv.online ? '在线' : '离线')}
+            (conv.id === PUBLIC_CONVERSATION_ID
+              ? '公共频道'
+              : conv.online
+                ? '在线'
+                : conv.unknown
+                  ? '未知'
+                  : '离线')}
         </Typography>
       </Box>
       <RowBadge label={badge} count={conv.unread} />
@@ -389,7 +395,6 @@ export default function Sidebar({
   const [pendingClear, setPendingClear] = useState<Conversation | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   const [pendingInfo, setPendingInfo] = useState<Conversation | null>(null)
-  const [roomInfoTarget, setRoomInfoTarget] = useState<Conversation | null>(null)
   const [aliasTarget, setAliasTarget] = useState<Conversation | null>(null)
   const [aliasDraft, setAliasDraft] = useState('')
   const [testing, setTesting] = useState<string | null>(null)
@@ -405,31 +410,9 @@ export default function Sidebar({
   useRightClickDismiss(menu !== null, () => setMenu(null))
   const menuShown = useRetained(menu)
   const menuIsBle = menuShown?.conv.id.startsWith(BLE_PREFIX) ?? false
-  const menuIsRelay = menuShown?.conv.id.startsWith(RELAY_PREFIX) ?? false
-  const menuRelayPublic = menuShown?.conv.id === `${RELAY_PREFIX}public`
   const clearShown = useRetained(pendingClear)
   const deleteShown = useRetained(pendingDelete)
   const infoShown = useRetained(pendingInfo)
-  const roomInfoShown = useRetained(roomInfoTarget)
-  const roomInfoRoomId = roomInfoShown?.id.startsWith(RELAY_PREFIX)
-    ? roomInfoShown.id.slice(RELAY_PREFIX.length)
-    : ''
-  const roomInfoRoom = (relay?.rooms ?? []).find((room) => room.id === roomInfoRoomId)
-  const roomInfoCreator = roomInfoRoom?.creator ?? ''
-  const roomInfoCreatorName =
-    roomInfoCreator === ''
-      ? '—'
-      : roomInfoCreator === relay?.deviceId
-        ? '我'
-        : (relay?.members ?? {})[roomInfoRoomId]?.find(
-            (member) => member.deviceId === roomInfoCreator
-          )?.name || roomInfoCreator
-  const roomInfoRows = [
-    { label: '房间名', value: roomInfoRoom?.name || roomInfoShown?.name || '—' },
-    { label: '房间号', value: roomInfoRoom?.code || '—' },
-    { label: '群主', value: roomInfoCreatorName },
-    { label: '成员数', value: String(roomInfoRoom?.memberCount ?? 0) }
-  ]
   const lastByConv = useMemo(() => lastMessageMap(messages), [messages])
   const addrById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer.addr ?? ''])),
@@ -468,8 +451,8 @@ export default function Sidebar({
 
   const openMenu = (event: React.MouseEvent, conv: Conversation): void => {
     event.preventDefault()
-    // 局域网广播没有设备类操作，操作都在聊天页右上角。
-    if (conv.id === PUBLIC_CONVERSATION_ID) return
+    // 局域网广播和公网会话的操作都在聊天页右上角，列表里不弹菜单。
+    if (conv.id === PUBLIC_CONVERSATION_ID || conv.id.startsWith(RELAY_PREFIX)) return
     setMenu({ x: event.clientX, y: event.clientY, conv })
   }
 
@@ -505,15 +488,6 @@ export default function Sidebar({
       notify(error instanceof Error ? error.message : '加入失败', 'error')
     } finally {
       setRoomBusy(false)
-    }
-  }
-
-  const leaveRoom = async (conv: Conversation): Promise<void> => {
-    try {
-      await window.xt.relayLeave(conv.id.slice(RELAY_PREFIX.length))
-      if (conv.id === selectedId) onSelect(PUBLIC_CONVERSATION_ID)
-    } catch (error) {
-      notify(error instanceof Error ? error.message : '退出失败', 'error')
     }
   }
 
@@ -622,8 +596,8 @@ export default function Sidebar({
   )
   const pinnedDms = dms.filter((conv) => pinnedIds.includes(conv.id))
   const rest = dms.filter((conv) => !pinnedIds.includes(conv.id))
-  const online = rest.filter((conv) => conv.online)
-  const offline = rest.filter((conv) => !conv.online)
+  const online = rest.filter((conv) => conv.online || conv.unknown)
+  const offline = rest.filter((conv) => !conv.online && !conv.unknown)
   const searching = query.trim() !== ''
 
   const bleRows = useMemo(() => {
@@ -732,7 +706,9 @@ export default function Sidebar({
           : '未连接'
         : infoShown.online
           ? '在线'
-          : '离线'
+          : infoShown.unknown
+            ? '未知'
+            : '离线'
     })
     if (infoBle?.address) infoRows.push({ label: '蓝牙地址', value: infoBle.address })
     if (infoBle) infoRows.push({ label: '信号强度', value: `${infoBle.rssi} dBm` })
@@ -909,6 +885,7 @@ export default function Sidebar({
                   .sort(
                     (a, b) =>
                       Number(b.online) - Number(a.online) ||
+                      Number(b.unknown) - Number(a.unknown) ||
                       (b.last_message_at || 0) - (a.last_message_at || 0)
                   )
                   .map((conv) => (
@@ -982,43 +959,7 @@ export default function Sidebar({
           }
         }}
       >
-        {menuIsRelay ? (
-          <>
-            <MenuItem
-              onClick={() => {
-                setRoomInfoTarget(menu?.conv ?? null)
-                setMenu(null)
-              }}
-            >
-              查看房间信息
-            </MenuItem>
-            <Divider />
-            <MenuItem
-              onClick={() => {
-                setPendingClear(menu?.conv ?? null)
-                setMenu(null)
-              }}
-            >
-              清空聊天记录
-            </MenuItem>
-            {!menuRelayPublic && (
-              <>
-                <Divider />
-                <MenuItem
-                  sx={{ color: 'error.main' }}
-                  onClick={() => {
-                    const conv = menu?.conv
-                    setMenu(null)
-                    if (conv) void leaveRoom(conv)
-                  }}
-                >
-                  退出房间
-                </MenuItem>
-              </>
-            )}
-          </>
-        ) : (
-          <>
+        <>
             <MenuItem
               disabled={menuShown?.conv.id === PUBLIC_CONVERSATION_ID}
               onClick={() => {
@@ -1133,8 +1074,7 @@ export default function Sidebar({
                 </MenuItem>
               </>
             )}
-          </>
-        )}
+        </>
       </Menu>
 
       <Dialog open={pendingClear !== null} onClose={() => setPendingClear(null)}>
@@ -1205,25 +1145,6 @@ export default function Sidebar({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPendingInfo(null)}>关闭</Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={roomInfoTarget !== null} onClose={() => setRoomInfoTarget(null)}>
-        <DialogTitle>房间信息</DialogTitle>
-        <DialogContent sx={{ minWidth: 320 }}>
-          {roomInfoRows.map((row) => (
-            <Box key={row.label} sx={{ display: 'flex', gap: 2, py: 0.5 }}>
-              <Typography sx={{ width: 72, flexShrink: 0, fontSize: 13, color: 'text.secondary' }}>
-                {row.label}
-              </Typography>
-              <Typography sx={{ flex: 1, fontSize: 13, wordBreak: 'break-all' }}>
-                {row.value}
-              </Typography>
-            </Box>
-          ))}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRoomInfoTarget(null)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

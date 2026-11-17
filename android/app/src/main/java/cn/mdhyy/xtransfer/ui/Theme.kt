@@ -26,11 +26,12 @@ import cn.mdhyy.xtransfer.R
 
 data class XtColors(
     val success: Color,
+    val warning: Color,
     val errorOnPrimary: Color
 )
 
 val LocalXtColors = staticCompositionLocalOf {
-    XtColors(Color(0xFF2E7D32), Color(0xFFFFDAD6))
+    XtColors(Color(0xFF2E7D32), Color(0xFFF9A825), Color(0xFFFFDAD6))
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -229,6 +230,7 @@ fun XTransferTheme(mode: String, seed: String, misans: Boolean = true, content: 
     val colors = scheme(seed, dark)
     val xt = XtColors(
         success = if (dark) Color(0xFF81C784) else Color(0xFF2E7D32),
+        warning = if (dark) Color(0xFFFFD54F) else Color(0xFFF9A825),
         errorOnPrimary = if (dark) Color(0xFF8C1D18) else Color(0xFFFFDAD6)
     )
     val view = LocalView.current

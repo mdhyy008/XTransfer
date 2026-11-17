@@ -13,7 +13,6 @@ import {
   Typography,
   useMediaQuery
 } from '@mui/material'
-import AppsRounded from '@mui/icons-material/AppsRounded'
 import type {
   Conversation,
   FileEntry,
@@ -834,7 +833,7 @@ function Shell() {
             onOpen={handleOpenBucketEntry}
             notify={notify}
           />
-        ) : page === 'lan' ? (
+        ) : (
           <SharePage
             bucket={bucket}
             onAddFiles={() => void handlePickFiles()}
@@ -845,31 +844,6 @@ function Shell() {
             onOpen={handleOpenBucketEntry}
             notify={notify}
           />
-        ) : (
-          <Box
-            sx={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 1.5
-            }}
-          >
-            <Box
-              sx={{
-                width: 104,
-                height: 104,
-                borderRadius: '50%',
-                bgcolor: 'action.hover',
-                display: 'grid',
-                placeItems: 'center'
-              }}
-            >
-              <AppsRounded sx={{ fontSize: 44, color: 'text.disabled' }} />
-            </Box>
-            <Typography sx={{ color: 'text.secondary', fontSize: 13 }}>暂无小程序</Typography>
-          </Box>
         )}
       </Box>
       <BucketDrawer

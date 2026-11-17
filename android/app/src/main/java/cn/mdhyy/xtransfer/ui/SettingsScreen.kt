@@ -112,7 +112,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.mdhyy.xtransfer.XlanApp
 import cn.mdhyy.xtransfer.data.AppSettings
 import cn.mdhyy.xtransfer.data.DeviceInfo
-import cn.mdhyy.xtransfer.data.ONLINE_WINDOW_SEC
 import cn.mdhyy.xtransfer.data.PermissionPrompts
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.ServiceStatus
@@ -372,11 +371,8 @@ fun SettingsScreen(
         add(SelfCheck("收件目录", recvError == null, recvError ?: recvDir))
         val dataError = writeTest(context.filesDir)
         add(SelfCheck("数据目录", dataError == null, dataError ?: context.filesDir.absolutePath))
-        // 服务端保存的是发现过的全部设备，只有最近 12 秒还在广播的才算在线。
-        val nowSec = System.currentTimeMillis() / 1000
-        val online = peers.count {
-            it.id != info?.id && it.addr != null && nowSec - it.lastSeen <= ONLINE_WINDOW_SEC
-        }
+        // 服务端保存的是发现过的全部设备，只有本次启动后确认过心跳的才算在线。
+        val online = peers.count { it.id != info?.id && it.addr != null && repo.isPeerOnline(it) }
         add(SelfCheck("在线设备", true, "$online 台"))
     }
 

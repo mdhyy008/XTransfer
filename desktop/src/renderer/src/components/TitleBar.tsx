@@ -56,6 +56,8 @@ export default function TitleBar({
         pl: 2,
         pr: 0.5,
         bgcolor: 'background.default',
+        borderBottom: 1,
+        borderColor: 'divider',
         userSelect: 'none'
       }}
     >

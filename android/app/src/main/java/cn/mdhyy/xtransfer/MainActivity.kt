@@ -137,10 +137,10 @@ class MainActivity : ComponentActivity() {
         Thread {
             val items = uris.mapNotNull { repo.makeFileItem(it) }
             if (items.isEmpty()) return@Thread
-            repo.addBucket(items)
             val notice = ShareNotice(
                 files = items.count { it.kind != "folder" },
-                folders = items.count { it.kind == "folder" }
+                folders = items.count { it.kind == "folder" },
+                items = items
             )
             runOnUiThread { shareNotice = notice }
         }.start()
