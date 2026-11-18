@@ -665,8 +665,8 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                // 收件目录固定以「X互传」收尾，这里只展示到它的父目录。
-                                text = File(recvDir).parent ?: recvDir,
+                                // 收件目录以「X互传」收尾，只展示末两级，比如 ../Download/X互传。
+                                text = shortRecvDir(recvDir),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -1518,6 +1518,14 @@ internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
     ) {
         Column(modifier = Modifier.padding(vertical = 4.dp), content = content)
     }
+}
+
+// 收件目录以「X互传」收尾，只展示末两级，比如 ../Download/X互传。
+private fun shortRecvDir(full: String): String {
+    val trimmed = full.trimEnd('/', '\\')
+    val parts = trimmed.split('/', '\\').filter { it.isNotEmpty() }
+    if (parts.size <= 2) return trimmed
+    return ".." + File.separator + parts.takeLast(2).joinToString(File.separator)
 }
 
 @Composable

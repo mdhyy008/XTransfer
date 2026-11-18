@@ -98,13 +98,13 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-// 收件目录固定以「X互传」收尾，设置里只展示到它的父目录。
-function parentPath(full: string): string {
+// 收件目录以「X互传」收尾，设置里只展示末两级，比如 ..\Downloads\X互传。
+function shortRecvDir(full: string): string {
   const trimmed = full.replace(/[\\/]+$/, '')
-  const cut = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
-  if (cut <= 0) return trimmed
-  const parent = trimmed.slice(0, cut)
-  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
+  const sep = trimmed.includes('\\') ? '\\' : '/'
+  const parts = trimmed.split(/[\\/]+/).filter(Boolean)
+  if (parts.length <= 2) return trimmed
+  return `..${sep}${parts.slice(-2).join(sep)}`
 }
 
 function Row({
@@ -643,7 +643,7 @@ export default function SettingsDialog({
           <Row
             icon={<FolderRounded fontSize="small" />}
             title="收件目录"
-            description={config?.recvDir ? parentPath(config.recvDir) : undefined}
+            description={config?.recvDir ? shortRecvDir(config.recvDir) : undefined}
             trailing={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                 <Button
