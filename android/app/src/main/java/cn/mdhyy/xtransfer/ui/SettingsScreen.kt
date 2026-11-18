@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -664,9 +665,12 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = recvDir,
+                                // 收件目录固定以「X互传」收尾，这里只展示到它的父目录。
+                                text = File(recvDir).parent ?: recvDir,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             Icon(
@@ -743,6 +747,22 @@ fun SettingsScreen(
                         title = "建议与反馈",
                         showChevron = true,
                         onClick = { showFeedback = true }
+                    )
+                    SettingDivider()
+                    SettingRow(
+                        icon = Icons.Rounded.Link,
+                        title = "软件发布地址",
+                        showChevron = true,
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse("https://github.com/mdhyy008/XTransfer/releases")
+                                    )
+                                )
+                            }
+                        }
                     )
                     SettingDivider()
                     SettingRow(
@@ -1564,7 +1584,10 @@ internal fun SettingRow(
             Text(
                 text = trailingText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 160.dp)
             )
         }
         if (showChevron) {

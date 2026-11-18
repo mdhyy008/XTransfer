@@ -57,9 +57,11 @@ import PlatformIcon from './PlatformIcon'
 import ThemeDialog from './ThemeDialog'
 import { useRetained } from './useRetained'
 
-const OPEN_SOURCE: [string, string, string?][] = [
+const APP_REPOS: [string, string, string][] = [
   ['X互传', 'MIT', 'https://github.com/mdhyy008/XTransfer'],
-  ['xlan', 'MIT', 'https://github.com/mdhyy008/xlan'],
+  ['xlan', 'MIT', 'https://github.com/mdhyy008/xlan']
+]
+const OPEN_SOURCE: [string, string][] = [
   ['Electron', 'MIT'],
   ['React', 'MIT'],
   ['MUI', 'MIT'],
@@ -96,20 +98,27 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+// 收件目录固定以「X互传」收尾，设置里只展示到它的父目录。
+function parentPath(full: string): string {
+  const trimmed = full.replace(/[\\/]+$/, '')
+  const cut = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
+  if (cut <= 0) return trimmed
+  const parent = trimmed.slice(0, cut)
+  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
+}
+
 function Row({
   icon,
   title,
   description,
   trailing,
-  onClick,
-  wrapDescription
+  onClick
 }: {
   icon: ReactNode
   title: string
   description?: string
   trailing?: ReactNode
   onClick?: () => void
-  wrapDescription?: boolean
 }) {
   return (
     <Box
@@ -135,12 +144,9 @@ function Row({
           <Typography
             variant="body2"
             color="text.secondary"
-            noWrap={!wrapDescription}
+            noWrap
             title={description}
-            sx={{
-              display: 'block',
-              ...(wrapDescription ? { whiteSpace: 'normal', wordBreak: 'break-all' } : {})
-            }}
+            sx={{ display: 'block' }}
           >
             {description}
           </Typography>
@@ -153,6 +159,40 @@ function Row({
 
 function GroupDivider() {
   return <Divider sx={{ ml: '48px', mr: 1 }} />
+}
+
+function OpenRow({ project, license, url }: { project: string; license: string; url?: string }) {
+  return (
+    <Box
+      onClick={
+        url
+          ? () => {
+              window.xt.openExternal(url).catch(() => {})
+            }
+          : undefined
+      }
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1.5,
+        py: 0.75,
+        mx: -1,
+        px: 1,
+        borderRadius: '8px',
+        cursor: url ? 'pointer' : undefined,
+        '&:hover': url ? { bgcolor: 'action.hover' } : undefined
+      }}
+    >
+      <CodeRounded fontSize="small" sx={{ color: 'text.secondary' }} />
+      <Typography variant="body2" sx={{ flex: 1 }}>
+        {project}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {license}
+      </Typography>
+      {url && <ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />}
+    </Box>
+  )
 }
 
 const Md3Switch = styled(Switch)(({ theme }) => ({
@@ -603,8 +643,7 @@ export default function SettingsDialog({
           <Row
             icon={<FolderRounded fontSize="small" />}
             title="收件目录"
-            description={config?.recvDir}
-            wrapDescription
+            description={config?.recvDir ? parentPath(config.recvDir) : undefined}
             trailing={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                 <Button
@@ -756,6 +795,15 @@ export default function SettingsDialog({
             icon={<FeedbackRounded fontSize="small" />}
             title="建议与反馈"
             onClick={() => setFeedbackOpen(true)}
+            trailing={<ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />}
+          />
+          <GroupDivider />
+          <Row
+            icon={<LinkRounded fontSize="small" />}
+            title="软件发布地址"
+            onClick={() => {
+              window.xt.openExternal('https://github.com/mdhyy008/XTransfer/releases').catch(() => {})
+            }}
             trailing={<ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />}
           />
           <GroupDivider />
@@ -1080,31 +1128,23 @@ export default function SettingsDialog({
           </Box>
           <Divider />
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
-            <PublicRounded fontSize="small" sx={{ color: 'text.secondary' }} />
-            <Typography variant="body2" sx={{ flex: 1 }}>
-              网址
-            </Typography>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ cursor: 'pointer' }}
-              onClick={() => {
-                window.xt.openExternal('https://mdhyy.cn').catch(() => {})
-              }}
-            >
-              mdhyy.cn
-            </Typography>
-          </Box>
-          <Divider />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
             <LinkRounded fontSize="small" sx={{ color: 'text.secondary' }} />
-            <Typography variant="body2" sx={{ flex: 1 }}>
-              官网
+            <Typography variant="body2" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+              软件官网
             </Typography>
             <Typography
               variant="body2"
               color="text.secondary"
-              sx={{ cursor: 'pointer' }}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                ml: 1,
+                textAlign: 'right',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                cursor: 'pointer'
+              }}
               onClick={() => {
                 window.xt.openExternal('https://mdhyy.cn/tools/page/x-transfer/').catch(() => {})
               }}
@@ -1117,45 +1157,31 @@ export default function SettingsDialog({
             color="primary"
             sx={{ display: 'block', pt: 1.5, pb: 0.5 }}
           >
-            开源项目
+            本软件开源地址
           </Typography>
-          {OPEN_SOURCE.map(([project, license, url]) => (
-            <Box
-              key={project}
-              onClick={
-                url
-                  ? () => {
-                      window.xt.openExternal(url).catch(() => {})
-                    }
-                  : undefined
-              }
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1.5,
-                py: 0.75,
-                mx: -1,
-                px: 1,
-                borderRadius: '8px',
-                cursor: url ? 'pointer' : undefined,
-                '&:hover': url ? { bgcolor: 'action.hover' } : undefined
-              }}
-            >
-              <CodeRounded fontSize="small" sx={{ color: 'text.secondary' }} />
-              <Typography variant="body2" sx={{ flex: 1 }}>
-                {project}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {license}
-              </Typography>
-              {url && (
-                <ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />
-              )}
-            </Box>
+          {APP_REPOS.map(([project, license, url]) => (
+            <OpenRow key={project} project={project} license={license} url={url} />
+          ))}
+          <Typography
+            variant="caption"
+            color="primary"
+            sx={{ display: 'block', pt: 1.5, pb: 0.5 }}
+          >
+            引用的开源项目
+          </Typography>
+          {OPEN_SOURCE.map(([project, license]) => (
+            <OpenRow key={project} project={project} license={license} />
           ))}
           <Divider sx={{ mt: 1.5 }} />
           <Typography variant="body2" sx={{ display: 'block', pt: 1.5, pb: 1 }}>
             微信赞赏
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: 'block', mb: 1, textAlign: 'center' }}
+          >
+            微信扫码
           </Typography>
           <Box
             component="img"

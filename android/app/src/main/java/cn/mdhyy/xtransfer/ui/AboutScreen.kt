@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -128,22 +127,8 @@ fun AboutScreen(onBack: () -> Unit) {
                 )
                 SettingDivider()
                 SettingRow(
-                    icon = Icons.Rounded.Public,
-                    title = "网址",
-                    trailingText = "mdhyy.cn",
-                    showChevron = true,
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse("https://mdhyy.cn"))
-                            )
-                        }
-                    }
-                )
-                SettingDivider()
-                SettingRow(
                     icon = Icons.Rounded.Link,
-                    title = "官网",
+                    title = "软件官网",
                     trailingText = "mdhyy.cn/tools/page/x-transfer",
                     showChevron = true,
                     onClick = {
@@ -158,7 +143,7 @@ fun AboutScreen(onBack: () -> Unit) {
                     }
                 )
             }
-            SectionTitle("开源项目")
+            SectionTitle("本软件开源地址")
             SettingsGroup {
                 SettingRow(
                     icon = Icons.Rounded.Code,
@@ -193,8 +178,11 @@ fun AboutScreen(onBack: () -> Unit) {
                         }
                     }
                 )
-                OPEN_SOURCE.forEach { (name, license) ->
-                    SettingDivider()
+            }
+            SectionTitle("引用的开源项目")
+            SettingsGroup {
+                OPEN_SOURCE.forEachIndexed { index, (name, license) ->
+                    if (index > 0) SettingDivider()
                     SettingRow(
                         icon = Icons.Rounded.Code,
                         title = name,
@@ -203,6 +191,12 @@ fun AboutScreen(onBack: () -> Unit) {
                 }
             }
             SectionTitle("微信赞赏")
+            Text(
+                text = "截图微信识别进行赞赏",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
             Image(
                 painter = painterResource(R.drawable.zsm),
                 contentDescription = "微信赞赏",
