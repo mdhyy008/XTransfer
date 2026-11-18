@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import cn.mdhyy.xtransfer.R
@@ -201,6 +202,14 @@ fun AboutScreen(onBack: () -> Unit) {
                     )
                 }
             }
+            SectionTitle("微信赞赏")
+            Image(
+                painter = painterResource(R.drawable.zsm),
+                contentDescription = "微信赞赏",
+                modifier = Modifier
+                    .size(200.dp)
+                    .clip(RoundedCornerShape(16.dp))
+            )
             Spacer(Modifier.height(32.dp))
         }
     }

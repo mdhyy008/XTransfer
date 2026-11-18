@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  Alert,
   Box,
   Button,
   CircularProgress,
@@ -10,6 +11,7 @@ import {
   Divider,
   IconButton,
   LinearProgress,
+  Link,
   Menu,
   MenuItem,
   Switch,
@@ -54,6 +56,44 @@ import { useRightClickDismiss } from './useRightClickDismiss'
 
 const TIME_GAP_SECONDS = 5 * 60
 const BUCKET_TYPE_ORDER = ['图片', '视频', '音频', '文档', 'PDF', '压缩包', '安装包', '文件', '文件夹']
+
+const LINK_PATTERN = /\b(?:https?:\/\/|mailto:|tel:)[^\s<>"']+/gi
+const LINK_TRAILING = /[,，。、；：！？…）】》”’"'.,!?;:)\]}]+$/
+
+function renderLinkified(text: string, mine: boolean): ReactNode {
+  const nodes: ReactNode[] = []
+  let last = 0
+  for (const match of text.matchAll(LINK_PATTERN)) {
+    const raw = match[0]
+    const href = raw.replace(LINK_TRAILING, '')
+    if (!href) continue
+    const start = match.index ?? 0
+    if (start > last) nodes.push(text.slice(last, start))
+    nodes.push(
+      <Link
+        key={`${start}-${href}`}
+        href={href}
+        underline="always"
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          void window.xt.openExternal(href)
+        }}
+        sx={{
+          color: mine ? '#9ECBFF' : '#1677FF',
+          cursor: 'pointer',
+          wordBreak: 'break-all'
+        }}
+      >
+        {href}
+      </Link>
+    )
+    last = start + href.length
+  }
+  if (nodes.length === 0) return text
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
 
 function isSendingMessage(message: Message): boolean {
   return (
@@ -201,6 +241,13 @@ const AUDIO_EXT = new Set(['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'op
 const VIDEO_EXT = new Set(['mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', 'wmv', 'flv', 'ts', 'mpg', 'mpeg', '3gp'])
 const ARCHIVE_EXT = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'])
 const DOC_EXT = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'rtf', 'csv'])
+const INSTALL_EXT = new Set([
+  'apk', 'apks', 'xapk', 'aab',
+  'hap', 'app', 'ipa',
+  'appx', 'appxbundle', 'msix', 'msixbundle', 'msi', 'exe',
+  'dmg', 'pkg',
+  'deb', 'rpm', 'appimage'
+])
 
 function extOf(name: string): string {
   const lower = name.toLowerCase()
@@ -221,7 +268,7 @@ export function fileKindLabel(name: string): string {
   if (VIDEO_EXT.has(ext)) return '视频'
   if (ARCHIVE_EXT.has(ext)) return '压缩包'
   if (ext === 'pdf') return 'PDF'
-  if (ext === 'apk') return '安装包'
+  if (INSTALL_EXT.has(ext)) return '安装包'
   if (DOC_EXT.has(ext)) return '文档'
   return '文件'
 }
@@ -233,7 +280,7 @@ export function typeIcon(name: string): React.ReactElement {
   if (VIDEO_EXT.has(ext)) return <MovieRounded fontSize="medium" />
   if (ARCHIVE_EXT.has(ext)) return <FolderZipRounded fontSize="medium" />
   if (ext === 'pdf') return <PictureAsPdfRounded fontSize="medium" />
-  if (ext === 'apk') return <AndroidRounded fontSize="medium" />
+  if (INSTALL_EXT.has(ext)) return <AndroidRounded fontSize="medium" />
   if (DOC_EXT.has(ext)) return <ArticleRounded fontSize="medium" />
   return <InsertDriveFileRounded fontSize="medium" />
 }
@@ -469,6 +516,9 @@ function MessageRow({
             <Box
               onContextMenu={handleContext}
               sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
                 px: 1.75,
                 py: 1,
                 borderRadius: mine ? '20px 20px 6px 20px' : '20px 20px 20px 6px',
@@ -476,13 +526,27 @@ function MessageRow({
                 color: mine ? 'primary.contrastText' : 'text.primary',
                 fontSize: 14,
                 lineHeight: 1.55,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
                 userSelect: 'text',
                 cursor: 'text'
               }}
             >
-              {message.body}
+              <Box
+                component="span"
+                sx={{ minWidth: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                {message.body ? renderLinkified(message.body, mine) : message.body}
+              </Box>
+              {mine && message.status === 'failed' && (
+                <Tooltip title="发送失败">
+                  <IconButton
+                    size="small"
+                    onClick={() => onShowError(message)}
+                    sx={{ color: 'inherit', opacity: 0.8, p: 0.25, m: -0.25, flexShrink: 0 }}
+                  >
+                    <ErrorOutlineRounded sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           ) : (
             <FileCard
@@ -530,27 +594,6 @@ function MessageRow({
                 </IconButton>
               </Tooltip>
             )}
-          </Box>
-        )}
-        {mine && message.kind === 'text' && message.status === 'failed' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.5 }}>
-            <IconButton
-              size="small"
-              onClick={() => onShowError(message)}
-              sx={{ color: 'error.main', width: 18, height: 18 }}
-            >
-              <ErrorOutlineRounded sx={{ fontSize: 15 }} />
-            </IconButton>
-            <Typography sx={{ fontSize: 11, color: 'error.main' }}>发送失败</Typography>
-            <Button
-              size="small"
-              onClick={() =>
-                message.channel === 'relay' ? onRetryRelay(message) : onRetryText(message.id)
-              }
-              sx={{ minWidth: 0, minHeight: 20, px: 0.75, py: 0, fontSize: 11 }}
-            >
-              重试
-            </Button>
           </Box>
         )}
       </Box>
@@ -617,6 +660,9 @@ export default function ChatPane({
   const [aliasDraft, setAliasDraft] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [publicBannerOpen, setPublicBannerOpen] = useState(
+    () => localStorage.getItem('xt.publicBannerDismissed') !== '1'
+  )
   const [webOpen, setWebOpen] = useState(false)
   const [webBusy, setWebBusy] = useState(false)
   const [webStatus, setWebStatus] = useState<WebChatStatus | null>(null)
@@ -690,8 +736,15 @@ export default function ChatPane({
   }, [infoId, infoKind, infoPath])
 
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined
-  const lastMessageId = lastMessage?.id ?? ''
-  const lastMessageStatus = lastMessage?.status ?? ''
+  // 批量传文件时，完成的往往不是最后一条；把所有文件的状态拼进来，任何一个传完都能触发贴底。
+  const filesState = useMemo(
+    () =>
+      messages
+        .filter((item) => item.kind !== 'text')
+        .map((item) => `${item.id}:${item.status}`)
+        .join('|'),
+    [messages]
+  )
 
   // 切换会话一律回到底部。
   useEffect(() => {
@@ -712,12 +765,23 @@ export default function ChatPane({
     const isFile = lastMessage !== undefined && lastMessage.kind !== 'text'
     if (!stickRef.current && !isFile) return
     node.scrollTop = node.scrollHeight
-    // 文件缩略图/卡片渲染后再补一次，保证真正贴到底。
-    const raf = requestAnimationFrame(() => {
+    // 文件卡片要等完成态换了、缩略图加载完高度才定下来，隔两帧补一次，稍后再补一次。
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
       node.scrollTop = node.scrollHeight
+      raf2 = requestAnimationFrame(() => {
+        node.scrollTop = node.scrollHeight
+      })
     })
-    return () => cancelAnimationFrame(raf)
-  }, [messages.length, lastMessageId, lastMessageStatus])
+    const timer = window.setTimeout(() => {
+      node.scrollTop = node.scrollHeight
+    }, 200)
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+      clearTimeout(timer)
+    }
+  }, [messages.length, filesState])
 
   const handleListScroll = (): void => {
     const node = listRef.current
@@ -1187,7 +1251,7 @@ export default function ChatPane({
               sx={{
                 height: 20,
                 borderRadius: '6px',
-                bgcolor: online ? 'success.main' : unknown ? 'warning.main' : 'action.hover',
+                bgcolor: online ? 'primary.main' : unknown ? 'warning.main' : 'action.hover',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1212,7 +1276,7 @@ export default function ChatPane({
                     sx={{
                       fontSize: 13,
                       color: online
-                        ? 'success.contrastText'
+                        ? 'primary.contrastText'
                         : unknown
                           ? 'warning.contrastText'
                           : 'text.disabled'
@@ -1223,7 +1287,7 @@ export default function ChatPane({
                     sx={{
                       fontSize: 13,
                       color: online
-                        ? 'success.contrastText'
+                        ? 'primary.contrastText'
                         : unknown
                           ? 'warning.contrastText'
                           : 'text.disabled'
@@ -1234,7 +1298,7 @@ export default function ChatPane({
                     sx={{
                       fontSize: 13,
                       color: online
-                        ? 'success.contrastText'
+                        ? 'primary.contrastText'
                         : unknown
                           ? 'warning.contrastText'
                           : 'text.disabled'
@@ -1510,6 +1574,20 @@ export default function ChatPane({
           </>
         )}
       </Box>
+
+      {isPublic && publicBannerOpen && (
+        <Alert
+          severity="warning"
+          variant="standard"
+          onClose={() => {
+            setPublicBannerOpen(false)
+            localStorage.setItem('xt.publicBannerDismissed', '1')
+          }}
+          sx={{ borderRadius: 0, py: 0.25, fontSize: 13 }}
+        >
+          不要在这个频道发送私密信息，消息可能会同步到其他设备
+        </Alert>
+      )}
 
       {searchOpen && (
         <Box
@@ -1956,18 +2034,31 @@ export default function ChatPane({
             {errorTarget?.error_code || '发送失败'}
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setErrorTarget(null)}>关闭</Button>
+        <DialogActions sx={{ justifyContent: 'space-between' }}>
           <Button
-            variant="contained"
             onClick={() => {
-              const target = errorTarget
-              setErrorTarget(null)
-              if (target) retryFailed(target)
+              const text = errorTarget?.error_code || '发送失败'
+              navigator.clipboard
+                .writeText(text)
+                .then(() => notify('已复制'))
+                .catch(() => notify('复制失败', 'error'))
             }}
           >
-            重试
+            复制
           </Button>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button onClick={() => setErrorTarget(null)}>关闭</Button>
+            <Button
+              variant="contained"
+              onClick={() => {
+                const target = errorTarget
+                setErrorTarget(null)
+                if (target) retryFailed(target)
+              }}
+            >
+              重试
+            </Button>
+          </Box>
         </DialogActions>
       </Dialog>
 

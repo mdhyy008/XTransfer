@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
@@ -75,6 +76,7 @@ fun BucketSheet(
     onDismiss: () -> Unit,
     onAddFiles: () -> Unit,
     onAddFolder: () -> Unit,
+    onPaste: () -> Unit,
     onRemove: (String) -> Unit,
     onClear: () -> Unit
 ) {
@@ -128,6 +130,13 @@ fun BucketSheet(
                             modifier = Modifier.size(BUCKET_ICON_SIZE)
                         )
                     }
+                }
+                IconButton(onClick = onPaste) {
+                    Icon(
+                        Icons.Rounded.ContentPaste,
+                        contentDescription = "粘贴",
+                        modifier = Modifier.size(BUCKET_ICON_SIZE)
+                    )
                 }
                 IconButton(onClick = onAddFiles) {
                     Icon(

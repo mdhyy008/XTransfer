@@ -41,6 +41,8 @@ const val RELAY_PUBLIC_ROOM_NAME = "公网广播"
 private const val RECONNECT_MIN = 2_000L
 private const val RECONNECT_MAX = 30_000L
 private const val ACK_TIMEOUT = 15_000L
+private const val ACK_TIMEOUT_DETAIL =
+    "发送超时：15 秒内没有收到服务器确认，请检查网络后重试（错误码：ACK_TIMEOUT）"
 private const val DEVICE_FILE = "relay-device"
 
 data class RelayRoom(
@@ -250,7 +252,12 @@ class RelayManager(
                     .put("fileId", fileId)
             )
         } catch (e: Exception) {
-            db.messageDao().setStatus(id, "failed", e.message, now())
+            db.messageDao().setStatus(
+                id,
+                "failed",
+                "文件上传失败：${e.message ?: "未知错误"}（错误码：UPLOAD_FAILED）",
+                now()
+            )
             throw e
         }
     }
@@ -262,7 +269,7 @@ class RelayManager(
 
     fun kick(roomId: String, target: String) {
         if (roomId.isEmpty() || target.isEmpty()) return
-        send(JSONObject().put("type", "kick").put("room", roomId).put("target", target))
+        send(JSONObject().put("type", "kick").put("room", roomId).put("deviceId", target))
     }
 
     fun rename(roomId: String, name: String) {
@@ -598,8 +605,13 @@ class RelayManager(
                     now()
                 )
                 MediaPublisher.scan(app, target)
-            } catch (_: Exception) {
-                db.messageDao().setStatus(id, "failed", null, now())
+            } catch (e: Exception) {
+                db.messageDao().setStatus(
+                    id,
+                    "failed",
+                    "文件下载失败：${e.message ?: "未知错误"}（错误码：DOWNLOAD_FAILED）",
+                    now()
+                )
             } finally {
                 downloading.remove(id)
             }
@@ -732,14 +744,23 @@ class RelayManager(
         pending[id] = scope.launch {
             delay(ACK_TIMEOUT)
             pending.remove(id)
-            runCatching { db.messageDao().setStatus(id, "failed", null, now()) }
+            runCatching { db.messageDao().setStatus(id, "failed", ACK_TIMEOUT_DETAIL, now()) }
         }
     }
 
     private fun failPending() {
         for (id in pending.keys.toList()) {
             pending.remove(id)?.cancel()
-            scope.launch { runCatching { db.messageDao().setStatus(id, "failed", null, now()) } }
+            scope.launch {
+                runCatching {
+                    db.messageDao().setStatus(
+                        id,
+                        "failed",
+                        "与服务器的连接已断开，消息没有发出（错误码：DISCONNECTED）",
+                        now()
+                    )
+                }
+            }
         }
         pendingRoom?.let {
             if (!it.isCompleted) it.completeExceptionally(IllegalStateException("与中继服务器的连接已断开"))
@@ -766,7 +787,15 @@ class RelayManager(
         val dao = db.conversationDao()
         val existing = dao.get(convId)
         if (existing == null) {
-            dao.upsert(ConversationEntity(convId, name.ifBlank { roomId }, createdAt = now()))
+            // 房间里还留着上次的本地消息（退群/被踢时保留的），重建会话时把旧历史算作已读。
+            dao.upsert(
+                ConversationEntity(
+                    convId,
+                    name.ifBlank { roomId },
+                    lastReadAt = db.messageDao().latestCreatedAt(convId) ?: 0,
+                    createdAt = now()
+                )
+            )
         } else if (existing.name != name && name.isNotBlank()) {
             dao.rename(convId, name)
         }
@@ -778,7 +807,7 @@ class RelayManager(
         for (conv in db.conversationDao().all()) {
             if (!conv.id.startsWith(RELAY_CONVERSATION_PREFIX)) continue
             if (conv.id in ids) continue
-            deleteConversationLocal(conv.id)
+            dropConversation(conv.id)
         }
     }
 
@@ -794,12 +823,17 @@ class RelayManager(
         db.conversationDao().delete(convId)
     }
 
+    // 退群/被踢只摘掉会话条目，消息留着：重新加入时已下载的文件还在本地，不再重下一遍。
+    private suspend fun dropConversation(convId: String) {
+        db.conversationDao().delete(convId)
+    }
+
     private fun removeRoom(roomId: String) {
         if (roomId.isEmpty()) return
         rooms = rooms.filter { it.id != roomId }.toMutableList()
         members = members.toMutableMap().apply { remove(roomId) }
         emit()
-        scope.launch { deleteConversationLocal(RELAY_CONVERSATION_PREFIX + roomId) }
+        scope.launch { dropConversation(RELAY_CONVERSATION_PREFIX + roomId) }
     }
 
     private fun roomLabel(roomId: String): String {

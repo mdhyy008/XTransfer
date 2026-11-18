@@ -4,6 +4,8 @@ import {
   Badge,
   Box,
   Button,
+  CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -64,7 +66,15 @@ type Props = {
 const BLE_PREFIX = 'ble:'
 const RELAY_PREFIX = 'relay:'
 
-function ConvAvatar({ conv }: { conv: Conversation }) {
+function ConvAvatar({
+  conv,
+  lanAvailable,
+  relayAvailable
+}: {
+  conv: Conversation
+  lanAvailable: boolean
+  relayAvailable: boolean
+}) {
   const theme = useTheme()
   const relayRoom = conv.id === `${RELAY_PREFIX}public`
   const relay = conv.id.startsWith(RELAY_PREFIX)
@@ -73,11 +83,11 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
       <Badge
         overlap="circular"
         variant="dot"
-        invisible={!conv.online && !conv.unknown}
+        invisible={!relayAvailable}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         sx={{
           '& .MuiBadge-badge': {
-            bgcolor: conv.unknown ? 'warning.main' : 'success.main',
+            bgcolor: 'success.main',
             boxShadow: `0 0 0 2px ${theme.palette.background.default}`
           }
         }}
@@ -96,18 +106,31 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
         </Avatar>
       </Badge>
     ) : conv.id === PUBLIC_CONVERSATION_ID ? (
-      <Avatar
-        variant="rounded"
+      <Badge
+        overlap="circular"
+        variant="dot"
+        invisible={!lanAvailable}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         sx={{
-          width: 40,
-          height: 40,
-          borderRadius: '14px',
-          bgcolor: 'primary.main',
-          color: 'primary.contrastText'
+          '& .MuiBadge-badge': {
+            bgcolor: 'success.main',
+            boxShadow: `0 0 0 2px ${theme.palette.background.default}`
+          }
         }}
       >
-        <CampaignRounded fontSize="small" />
-      </Avatar>
+        <Avatar
+          variant="rounded"
+          sx={{
+            width: 40,
+            height: 40,
+            borderRadius: '14px',
+            bgcolor: 'primary.main',
+            color: 'primary.contrastText'
+          }}
+        >
+          <CampaignRounded fontSize="small" />
+        </Avatar>
+      </Badge>
     ) : (
       <Badge
         overlap="circular"
@@ -141,6 +164,7 @@ function ConvAvatar({ conv }: { conv: Conversation }) {
 
 // 行尾徽章：传输方式（#IP 末段 / BLE）和未读数合成一个，例如 BLE·3。
 function RowBadge({ label, count }: { label?: string; count: number }) {
+  const theme = useTheme()
   if (!label && count <= 0) return null
   const text = label
     ? count > 0
@@ -155,8 +179,10 @@ function RowBadge({ label, count }: { label?: string; count: number }) {
         height: 20,
         px: 0.8,
         borderRadius: '10px',
-        bgcolor: unread ? 'primary.main' : 'action.hover',
-        color: unread ? 'primary.contrastText' : 'text.secondary',
+        bgcolor: unread
+          ? 'primary.main'
+          : alpha(theme.palette.primary.main, theme.palette.mode === 'light' ? 0.12 : 0.22),
+        color: unread ? 'primary.contrastText' : 'primary.main',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -177,6 +203,8 @@ function ConvRow({
   badge,
   subtitle,
   selected,
+  lanAvailable,
+  relayAvailable,
   onSelect,
   onContextMenu
 }: {
@@ -185,6 +213,8 @@ function ConvRow({
   badge?: string
   subtitle?: string
   selected: boolean
+  lanAvailable: boolean
+  relayAvailable: boolean
   onSelect: () => void
   onContextMenu: (event: React.MouseEvent) => void
 }) {
@@ -218,7 +248,7 @@ function ConvRow({
         }
       }}
     >
-      <ConvAvatar conv={conv} />
+      <ConvAvatar conv={conv} lanAvailable={lanAvailable} relayAvailable={relayAvailable} />
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
           <Typography noWrap sx={{ flex: 1, fontWeight: 500, fontSize: 14 }}>
@@ -544,6 +574,10 @@ export default function Sidebar({
     try {
       const result = await window.xt.speedTest(id)
       setTestAvg((prev) => ({ ...prev, [id]: result.peak }))
+      const peaks = settings?.speedPeaks ?? {}
+      if (result.peak > (peaks[id] ?? 0)) {
+        patchSettings({ speedPeaks: { ...peaks, [id]: result.peak } })
+      }
     } catch (error) {
       notify(error instanceof Error ? error.message : '测试失败', 'error')
     } finally {
@@ -588,6 +622,9 @@ export default function Sidebar({
       (relayOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
       (relayOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
   )
+  // 只在真正发起连接时提示；等待重连的间隙不挂在这里，免得一直显示「正在连接」。
+  const relayBusy = relay?.connecting === true && !relay?.error
+  const relayShown = relay?.connected === true || relayBusy
   const dms = filtered.filter(
     (conv) =>
       conv.id !== PUBLIC_CONVERSATION_ID &&
@@ -722,7 +759,11 @@ export default function Sidebar({
     if (seenAt) infoRows.push({ label: '最近发现', value: formatWhen(seenAt) })
   }
   const infoPeak = infoShown
-    ? Math.max(peakByConv.get(infoShown.id) ?? 0, testAvg[infoShown.id] ?? 0)
+    ? Math.max(
+        peakByConv.get(infoShown.id) ?? 0,
+        testAvg[infoShown.id] ?? 0,
+        settings?.speedPeaks?.[infoShown.id] ?? 0
+      )
     : 0
   const liveValue =
     testing && liveSample && testing === liveSample.id ? liveSample.value : 0
@@ -732,7 +773,7 @@ export default function Sidebar({
       : '测试中'
     : infoPeak > 0
       ? `${formatSize(infoPeak)}/s`
-      : '未进行测试'
+      : '未测试'
 
   return (
     <Box
@@ -835,6 +876,8 @@ export default function Sidebar({
                     last={lastByConv.get(conv.id)}
                     badge={badgeFor(conv)}
                     selected={conv.id === selectedId}
+                    lanAvailable={!lanOffline}
+                    relayAvailable={relay?.connected === true}
                     onSelect={() => onSelect(conv.id)}
                     onContextMenu={(event) => openMenu(event, conv)}
                   />
@@ -859,6 +902,8 @@ export default function Sidebar({
                     last={lastByConv.get(conv.id)}
                     badge={badgeFor(conv)}
                     selected={conv.id === selectedId}
+                    lanAvailable={!lanOffline}
+                    relayAvailable={relay?.connected === true}
                     onSelect={() => onSelect(conv.id)}
                     onContextMenu={(event) => openMenu(event, conv)}
                   />
@@ -895,13 +940,15 @@ export default function Sidebar({
                       last={lastByConv.get(conv.id)}
                       badge={badgeFor(conv)}
                       selected={conv.id === selectedId}
+                      lanAvailable={!lanOffline}
+                      relayAvailable={relay?.connected === true}
                       onSelect={() => onSelect(conv.id)}
                       onContextMenu={(event) => openMenu(event, conv)}
                     />
                   ))}
               </Section>
             )}
-            {relay?.connected === true && (
+            <Collapse in={relayShown} timeout={{ enter: 280, exit: 180 }} unmountOnExit>
               <Section
                 title="公网"
                 action={
@@ -918,24 +965,50 @@ export default function Sidebar({
                   </Tooltip>
                 }
               >
-                {relayRows.map((conv) => (
-                  <ConvRow
-                    key={`relay-${conv.id}`}
-                    conv={conv}
-                    last={lastByConv.get(conv.id)}
-                    subtitle={
-                      relay?.connected ? '已连接' : relay?.connecting ? '正在连接' : '未连接'
-                    }
-                    selected={conv.id === selectedId}
-                    onSelect={() => onSelect(conv.id)}
-                    onContextMenu={(event) => openMenu(event, conv)}
-                  />
-                ))}
+                <Collapse
+                  in={relay?.connected === true}
+                  timeout={{ enter: 260, exit: 140 }}
+                  unmountOnExit
+                >
+                  <Box>
+                    {relayRows.map((conv) => (
+                      <ConvRow
+                        key={`relay-${conv.id}`}
+                        conv={conv}
+                        last={lastByConv.get(conv.id)}
+                        subtitle={
+                          relay?.connected ? '已连接' : relay?.connecting ? '正在连接' : '未连接'
+                        }
+                        selected={conv.id === selectedId}
+                        lanAvailable={!lanOffline}
+                        relayAvailable={relay?.connected === true}
+                        onSelect={() => onSelect(conv.id)}
+                        onContextMenu={(event) => openMenu(event, conv)}
+                      />
+                    ))}
+                  </Box>
+                </Collapse>
+                <Collapse in={relayBusy} timeout={{ enter: 200, exit: 120 }} unmountOnExit>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1.25,
+                      px: 2.5,
+                      py: 1.5
+                    }}
+                  >
+                    <CircularProgress size={14} thickness={5} />
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      正在连接
+                    </Typography>
+                  </Box>
+                </Collapse>
               </Section>
-            )}
+            </Collapse>
             {hasBleDevices && normalBleRows.length > 0 && bleList(normalBleRows)}
             {dms.length === 0 && pinnedBleRows.length === 0 && normalBleRows.length === 0 &&
-              relay?.connected !== true && (
+              !relayShown && (
                 <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
                   暂无设备
                 </Typography>

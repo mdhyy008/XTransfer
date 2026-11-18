@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -9,6 +10,7 @@ import {
   powerMonitor,
   screen,
   shell,
+  systemPreferences,
   Tray
 } from 'electron'
 import { execFile, spawn } from 'node:child_process'
@@ -715,7 +717,7 @@ function startLanWatch(): void {
   lanTimer = setInterval(tick, 2000)
 }
 
-function dirSize(dir: string): number {
+function dirSize(dir: string, skipTop?: Set<string>): number {
   let total = 0
   let entries: fs.Dirent[]
   try {
@@ -724,6 +726,7 @@ function dirSize(dir: string): number {
     return 0
   }
   for (const entry of entries) {
+    if (skipTop?.has(entry.name)) continue
     const full = path.join(dir, entry.name)
     try {
       total += entry.isDirectory() ? dirSize(full) : fs.statSync(full).size
@@ -758,8 +761,11 @@ async function dirSizeAsync(dir: string): Promise<number> {
   return total
 }
 
+// 运行时自动解压出来的组件，不是用户缓存，统计和清理都绕开它。
+const TMP_SKIP = new Set(['.net'])
+
 // 清理目录，但保留 keep 里的文件（暂存桶里还没发出去的截图就在这里面）。
-function purgeDirExcept(dir: string, keep: Set<string>): number {
+function purgeDirExcept(dir: string, keep: Set<string>, skipTop?: Set<string>): number {
   let freed = 0
   let entries: fs.Dirent[]
   try {
@@ -768,6 +774,7 @@ function purgeDirExcept(dir: string, keep: Set<string>): number {
     return 0
   }
   for (const entry of entries) {
+    if (skipTop?.has(entry.name)) continue
     const full = path.join(dir, entry.name)
     if (keep.has(full)) continue
     if (entry.isDirectory() && [...keep].some((item) => item.startsWith(full + path.sep))) {
@@ -811,7 +818,7 @@ function partsDir(): string {
 }
 
 function cacheSize(): number {
-  return dirSize(TMP_DIR) + dirSize(THUMB_DIR) + dirSize(partsDir())
+  return dirSize(TMP_DIR, TMP_SKIP) + dirSize(THUMB_DIR) + dirSize(RELAY_CACHE_DIR) + dirSize(partsDir())
 }
 
 for (const dir of [DATA_DIR, TMP_DIR, THUMB_DIR, RELAY_CACHE_DIR, path.join(DATA_DIR, 'logs'), path.join(DATA_DIR, 'crashes')]) {
@@ -3071,7 +3078,18 @@ function registerIpc(): void {
     const parent = BrowserWindow.fromWebContents(event.sender)
     const options: Electron.OpenDialogOptions = {
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '安装包', extensions: ['apk', 'apks', 'xapk'] }]
+      filters: [
+        {
+          name: '安装包',
+          extensions: [
+            'apk', 'apks', 'xapk', 'aab',
+            'hap', 'app', 'ipa',
+            'appx', 'appxbundle', 'msix', 'msixbundle', 'msi', 'exe',
+            'dmg', 'pkg',
+            'deb', 'rpm', 'appimage'
+          ]
+        }
+      ]
     }
     const result = parent
       ? await dialog.showOpenDialog(parent, options)
@@ -3192,6 +3210,38 @@ function registerIpc(): void {
     return jobId
   })
 
+  // 截图工具、网页右键「复制图片」的剪贴板里只有位图、没有磁盘路径，落成图片文件再进暂存桶。
+  ipcMain.handle('files:pasteImage', async () => {
+    let items: Electron.ClipboardItem[]
+    try {
+      items = await clipboard.read()
+    } catch {
+      return null
+    }
+    const exts: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/bmp': 'bmp',
+      'image/webp': 'webp'
+    }
+    for (const item of items) {
+      const type = item.types.find((mime) => mime in exts)
+      if (!type) continue
+      const blob = await item.getType(type)
+      if (!(blob instanceof Blob)) continue
+      const buffer = Buffer.from(await blob.arrayBuffer())
+      // 同一张图按内容哈希落成同一个文件，暂存桶按路径去重，重复 Ctrl+V 不会再出现一份。
+      const digest = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
+      const dir = path.join(TMP_DIR, 'paste')
+      fs.mkdirSync(dir, { recursive: true })
+      const file = path.join(dir, `截图_${digest}.${exts[type]}`)
+      if (!fs.existsSync(file)) fs.writeFileSync(file, buffer)
+      return inspectEntries([file])[0] ?? null
+    }
+    return null
+  })
+
   ipcMain.handle('screenshot:capture', async () => {
     if (capturingShot) return null
     capturingShot = true
@@ -3256,8 +3306,18 @@ function registerIpc(): void {
     xlan: state.info?.version ?? ''
   }))
 
+  ipcMain.handle('app:accentColor', () => {
+    try {
+      const raw = String(systemPreferences.getAccentColor() || '').replace(/^#/, '')
+      const hex = raw.slice(0, 6)
+      return /^[0-9a-f]{6}$/i.test(hex) ? `#${hex.toUpperCase()}` : '#0078D4'
+    } catch {
+      return '#0078D4'
+    }
+  })
+
   ipcMain.handle('app:openExternal', async (_event, url: string) => {
-    if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return
+    if (typeof url !== 'string' || !/^(https?:\/\/|mailto:|tel:)/i.test(url)) return
     await shell.openExternal(url)
   })
 
@@ -3550,17 +3610,22 @@ function registerIpc(): void {
   ipcMain.handle('cache:size', () => ({ total: cacheSize() }))
 
   ipcMain.handle('cache:clean', async (_event, preservePaths?: string[]) => {
+    const before = cacheSize()
     const res = await apiPost<{ parts?: number; freed_bytes?: number; records?: number }>(
       '/v1/cache/clean',
       { older_than_sec: 30 * 24 * 3600, dry_run: false }
     )
-    // 临时目录和缩略图缓存也一起清掉；暂存桶里的文件留着。
+    // 临时目录、缩略图和公网下载缓存一起清掉；暂存桶里的文件留着。
     const keep = new Set((preservePaths ?? []).map((item) => path.resolve(item)))
-    const localFreed = purgeDirExcept(TMP_DIR, keep) + clearDir(THUMB_DIR)
+    purgeDirExcept(TMP_DIR, keep, TMP_SKIP)
+    clearDir(THUMB_DIR)
+    clearDir(RELAY_CACHE_DIR)
     thumbCache.clear()
+    // 以统计口径的前后差为准，界面上“清了多大”必须和“还剩多大”对得上。
+    const freed = Math.max(before - cacheSize(), res.freed_bytes ?? 0)
     return {
       parts: res.parts ?? 0,
-      freedBytes: (res.freed_bytes ?? 0) + localFreed,
+      freedBytes: freed,
       records: res.records ?? 0
     }
   })

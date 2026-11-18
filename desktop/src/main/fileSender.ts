@@ -17,6 +17,26 @@ const ptyLib: typeof import('node-pty') | null = (() => {
   }
 })()
 
+// xlan 发送失败只给错误码，翻成用户能看懂的原因，同时保留原码方便反馈。
+function describeSendError(code: string): string {
+  const withCode = (text: string): string => `${text}（错误码：${code}）`
+  switch (code) {
+    case 'DENIED':
+      return withCode('对方拒绝了接收')
+    case 'TIMEOUT':
+      return withCode('发送超时：对方长时间没有响应，请确认对方在线后重试')
+    case 'CHECKSUM':
+      return withCode('文件校验失败：传输过程中内容损坏，请重试')
+    case 'NO_PEER':
+      return withCode('找不到对方设备：它可能已经离线或换了网络')
+    case 'ERROR':
+      return withCode('发送失败：未知错误')
+    default:
+      if (code.startsWith('EXIT_')) return withCode('发送进程异常退出')
+      return withCode('发送失败')
+  }
+}
+
 type JobFile = {
   messageId: string
   name: string
@@ -342,7 +362,7 @@ export class FileSender {
       // 对端已有同名同内容的文件，CLI 不会再传，界面要说明这一点。
       this.db.setMessageStatus(job.file.messageId, data.duplicate ? 'duplicate' : 'done')
     } else {
-      job.lastError = String(data.code || 'ERROR')
+      job.lastError = describeSendError(String(data.code || 'ERROR'))
       this.db.setMessageStatus(job.file.messageId, 'failed', job.lastError)
     }
     this.emit([job.file.messageId])
@@ -364,7 +384,7 @@ export class FileSender {
         this.db.setMessageStatus(
           job.file.messageId,
           'failed',
-          job.lastError || `EXIT_${exitCode}`
+          job.lastError || describeSendError(`EXIT_${exitCode}`)
         )
       }
     }

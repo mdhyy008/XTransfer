@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   CssBaseline,
   Dialog,
   DialogActions,
@@ -53,10 +54,13 @@ function Shell() {
   const [scanning, setScanning] = useState(false)
   const [bucket, setBucket] = useState<FileEntry[]>([])
   const [page, setPage] = useState<AppPage>('chat')
+  const [openingFile, setOpeningFile] = useState(false)
+  const openToken = useRef(0)
   const [bucketOpen, setBucketOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [dropNotice, setDropNotice] = useState('')
   const [dropNoticeVisible, setDropNoticeVisible] = useState(false)
+  const [accent, setAccent] = useState('#0078D4')
   const [lan, setLan] = useState<LanInfo | null>(null)
   const [lanReady, setLanReady] = useState(false)
   const [hotspot, setHotspot] = useState<HotspotStatus | null>(null)
@@ -106,6 +110,15 @@ function Shell() {
 
   useEffect(() => {
     void refreshHotspot()
+  }, [])
+
+  useEffect(() => {
+    window.xt
+      .accentColor()
+      .then((color) => {
+        if (/^#[0-9a-f]{6}$/i.test(color)) setAccent(color)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => window.xt.onHotspotChange(setHotspot), [])
@@ -184,10 +197,10 @@ function Shell() {
   const shownNotice = notice ?? lastNotice.current
 
   const themeSetting = snapshot?.settings.theme ?? 'system'
-  const seed = snapshot?.settings.seed ?? 'purple'
+  const seed = snapshot?.settings.seed ?? 'green'
   const misans = snapshot?.settings.misans ?? true
   const mode = themeSetting === 'system' ? (prefersDark ? 'dark' : 'light') : themeSetting
-  const theme = useMemo(() => buildTheme(mode, seed, misans), [mode, seed, misans])
+  const theme = useMemo(() => buildTheme(mode, seed, misans, accent), [mode, seed, misans, accent])
 
   useEffect(() => {
     let alive = true
@@ -273,6 +286,12 @@ function Shell() {
   useEffect(() => {
     if (conv && conv.unread > 0) window.xt.markRead(conv.id).catch(() => {})
   }, [conv])
+
+  // 公网文件下载期间换了会话或切了页，这次打开就作废，下载完了也不弹出来。
+  useEffect(() => {
+    openToken.current += 1
+    setOpeningFile(false)
+  }, [conv?.id, page])
 
   // 进入公共频道时向记录最全的设备补齐一次历史。
   const publicActive = conv?.id === PUBLIC_CONVERSATION_ID
@@ -448,6 +467,42 @@ function Shell() {
     }
   }
 
+  // 资源管理器复制的文件、截图工具复制到剪贴板的位图，窗口内 Ctrl+V 都直接进暂存桶。
+  useEffect(() => {
+    const onPaste = async (event: ClipboardEvent): Promise<void> => {
+      const files = Array.from(event.clipboardData?.files ?? [])
+      const paths = files.map((file) => window.xt.pathForFile(file)).filter(Boolean)
+      const hasImage =
+        files.some((file) => file.type.startsWith('image/')) ||
+        Array.from(event.clipboardData?.items ?? []).some(
+          (item) => item.kind === 'file' && item.type.startsWith('image/')
+        )
+      // 剪贴板里没有文件、也没有图片时不能拦，输入框里要正常粘贴文本。
+      if (paths.length === 0 && !hasImage) return
+      event.preventDefault()
+      try {
+        let entries = paths.length > 0 ? await window.xt.inspectPaths(paths) : []
+        if (entries.length === 0 && hasImage) {
+          const entry = await window.xt.pasteImage()
+          if (entry) entries = [entry]
+        }
+        if (entries.length === 0) return
+        addEntries(entries)
+        const files = entries.filter((entry) => entry.kind === 'file').length
+        const folders = entries.length - files
+        const parts: string[] = []
+        if (files > 0) parts.push(`${files}个文件`)
+        if (folders > 0) parts.push(`${folders}个文件夹`)
+        showDropNotice(`${parts.join('，')} 进入暂存桶`)
+      } catch (error) {
+        notify(error instanceof Error ? error.message : '读取粘贴项目失败', 'error')
+      }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const sendEntries = async (entries: FileEntry[], clearBucket: boolean): Promise<void> => {
     if (!conv || conv.id === PUBLIC_CONVERSATION_ID) return
     const usable = entries.filter((entry) => entry.exists)
@@ -542,10 +597,20 @@ function Shell() {
 
   const handleOpenFile = (message: Message): void => {
     if (message.channel === 'relay' && !message.local_path) {
+      const token = ++openToken.current
+      setOpeningFile(true)
       window.xt
         .relayCache(message.id)
-        .then((filePath) => openLocal(filePath, message.file_name || filePath, message.kind, true))
-        .catch((error) => notify(error instanceof Error ? error.message : '查看失败', 'error'))
+        .then((filePath) => {
+          if (token !== openToken.current) return
+          setOpeningFile(false)
+          openLocal(filePath, message.file_name || filePath, message.kind, true)
+        })
+        .catch((error) => {
+          if (token !== openToken.current) return
+          setOpeningFile(false)
+          notify(error instanceof Error ? error.message : '查看失败', 'error')
+        })
       return
     }
     const filePath = message.local_path
@@ -866,6 +931,7 @@ function Shell() {
         open={settingsOpen}
         snapshot={snapshot}
         preservedPaths={bucket.map((entry) => entry.path)}
+        accent={accent}
         onClose={() => setSettingsOpen(false)}
         notify={notify}
       />
@@ -902,6 +968,32 @@ function Shell() {
         }}
         onClose={() => setConnectionsOpen(false)}
       />
+      {openingFile && (
+        <Box
+          sx={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: (theme) => theme.zIndex.modal + 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: 'rgba(0,0,0,0.18)',
+            pointerEvents: 'none'
+          }}
+        >
+          <Box
+            sx={{
+              p: 2,
+              display: 'flex',
+              borderRadius: '50%',
+              bgcolor: 'background.paper',
+              boxShadow: 3
+            }}
+          >
+            <CircularProgress size={30} />
+          </Box>
+        </Box>
+      )}
       <Snackbar
         open={notice !== null}
         autoHideDuration={3000}

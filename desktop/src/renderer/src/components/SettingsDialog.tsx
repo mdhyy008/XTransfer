@@ -14,10 +14,9 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  Typography,
-  useTheme
+  Typography
 } from '@mui/material'
-import { alpha, styled } from '@mui/material/styles'
+import { styled } from '@mui/material/styles'
 import BlockRounded from '@mui/icons-material/BlockRounded'
 import CancelRounded from '@mui/icons-material/CancelRounded'
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded'
@@ -50,10 +49,12 @@ import PublicRounded from '@mui/icons-material/PublicRounded'
 import VisibilityRounded from '@mui/icons-material/VisibilityRounded'
 import type { DoctorResult, Snapshot, ThemeMode } from '../../../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../../../shared/types'
-import { seedPresets } from '../theme'
+import { seedName } from '../theme'
 import { describeError, formatSize } from '../model'
 import logo from '../assets/logo.png'
+import zsm from '../assets/zsm.png'
 import PlatformIcon from './PlatformIcon'
+import ThemeDialog from './ThemeDialog'
 import { useRetained } from './useRetained'
 
 const OPEN_SOURCE: [string, string, string?][] = [
@@ -73,6 +74,7 @@ type Props = {
   open: boolean
   snapshot: Snapshot | null
   preservedPaths: string[]
+  accent: string
   onClose: () => void
   notify: (text: string, severity?: 'success' | 'error' | 'warning' | 'info') => void
 }
@@ -99,13 +101,15 @@ function Row({
   title,
   description,
   trailing,
-  onClick
+  onClick,
+  wrapDescription
 }: {
   icon: ReactNode
   title: string
   description?: string
   trailing?: ReactNode
   onClick?: () => void
+  wrapDescription?: boolean
 }) {
   return (
     <Box
@@ -131,9 +135,12 @@ function Row({
           <Typography
             variant="body2"
             color="text.secondary"
-            noWrap
+            noWrap={!wrapDescription}
             title={description}
-            sx={{ display: 'block' }}
+            sx={{
+              display: 'block',
+              ...(wrapDescription ? { whiteSpace: 'normal', wordBreak: 'break-all' } : {})
+            }}
           >
             {description}
           </Typography>
@@ -212,10 +219,10 @@ export default function SettingsDialog({
   open,
   snapshot,
   preservedPaths,
+  accent,
   onClose,
   notify
 }: Props) {
-  const theme = useTheme()
   const [name, setName] = useState('')
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
@@ -228,6 +235,7 @@ export default function SettingsDialog({
   const [clearChatsOpen, setClearChatsOpen] = useState(false)
   const [clearOfflineOpen, setClearOfflineOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [themeOpen, setThemeOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedbackQr, setFeedbackQr] = useState('')
   const [chatChecked, setChatChecked] = useState<string[]>([])
@@ -277,7 +285,10 @@ export default function SettingsDialog({
 
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setThemeOpen(false)
+      return
+    }
     setName(config?.deviceName ?? '')
     setMessage('')
     setDoctor(null)
@@ -449,7 +460,7 @@ export default function SettingsDialog({
               <Row
                 icon={<BluetoothRounded fontSize="small" />}
                 title="蓝牙广播"
-                description={`蓝牙 ${snapshot?.bluetooth.version || '未知'} · ${snapshot?.bluetooth.address ? `MAC ${snapshot.bluetooth.address}` : 'MAC地址获取失败'}`}
+                description={`蓝牙 ${snapshot?.bluetooth.version || '未知'}${snapshot?.bluetooth.address ? ` · MAC ${snapshot.bluetooth.address}` : ''}`}
                 trailing={
                   <ToggleSwitch
                     checked={snapshot?.bluetooth.on === true}
@@ -528,29 +539,13 @@ export default function SettingsDialog({
           <Row
             icon={<ColorLensRounded fontSize="small" />}
             title="主题色"
+            onClick={() => setThemeOpen(true)}
             trailing={
-              <Box sx={{ display: 'flex', gap: 1.5 }}>
-                {(Object.keys(seedPresets) as (keyof typeof seedPresets)[]).map((key) => {
-                  const selected = settings?.seed === key
-                  return (
-                    <Box
-                      key={key}
-                      role="button"
-                      aria-label={seedPresets[key].name}
-                      title={seedPresets[key].name}
-                      onClick={() => patch({ seed: key })}
-                      sx={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: '50%',
-                        bgcolor: seedPresets[key].tone[theme.palette.mode].primary,
-                        cursor: 'pointer',
-                        border: '3px solid',
-                        borderColor: selected ? 'text.primary' : alpha(theme.palette.divider, 0.6)
-                      }}
-                    />
-                  )
-                })}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {seedName(settings?.seed ?? 'green')}
+                </Typography>
+                <ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />
               </Box>
             }
           />
@@ -609,6 +604,7 @@ export default function SettingsDialog({
             icon={<FolderRounded fontSize="small" />}
             title="收件目录"
             description={config?.recvDir}
+            wrapDescription
             trailing={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                 <Button
@@ -789,6 +785,14 @@ export default function SettingsDialog({
           </Typography>
         )}
       </DialogContent>
+
+      <ThemeDialog
+        open={themeOpen}
+        seed={settings?.seed ?? 'green'}
+        accent={accent}
+        onPick={(next) => patch({ seed: next })}
+        onClose={() => setThemeOpen(false)}
+      />
 
       <Dialog open={relayOpen} onClose={() => setRelayOpen(false)}>
         <DialogTitle sx={{ fontSize: 18 }}>中继服务器</DialogTitle>
@@ -1149,6 +1153,16 @@ export default function SettingsDialog({
               )}
             </Box>
           ))}
+          <Divider sx={{ mt: 1.5 }} />
+          <Typography variant="body2" sx={{ display: 'block', pt: 1.5, pb: 1 }}>
+            微信赞赏
+          </Typography>
+          <Box
+            component="img"
+            src={zsm}
+            alt="微信赞赏"
+            sx={{ display: 'block', width: 180, height: 180, mx: 'auto', borderRadius: 2 }}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAboutOpen(false)}>关闭</Button>

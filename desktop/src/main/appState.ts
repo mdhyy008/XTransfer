@@ -23,7 +23,7 @@ export class AppState {
   service: ServiceState = { running: false, base: '', tls: true, foreign: false }
   settings: Settings = {
     theme: 'system',
-    seed: 'purple',
+    seed: 'green',
     notifications: true,
     publicNotifications: false,
     closeToTray: true,
@@ -37,7 +37,8 @@ export class AppState {
     aliases: {},
     muted: [],
     pinned: [],
-    hidden: {}
+    hidden: {},
+    speedPeaks: {}
   }
   config: AppConfig = { deviceName: '', recvDir: '', autostart: false }
   bluetooth: BleState = {

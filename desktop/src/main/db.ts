@@ -106,13 +106,13 @@ export class Db {
     if (!id) return
     this.db
       .prepare(
-        `INSERT INTO conversations (peer_id, peer_name, platform, created_at)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO conversations (peer_id, peer_name, platform, last_read_at, created_at)
+         VALUES (?, ?, ?, COALESCE((SELECT MAX(created_at) FROM messages WHERE conversation_id = ?), 0), ?)
          ON CONFLICT(peer_id) DO UPDATE SET
            peer_name = CASE WHEN excluded.peer_name <> '' THEN excluded.peer_name ELSE conversations.peer_name END,
            platform = COALESCE(excluded.platform, conversations.platform)`
       )
-      .run(id, name, platform ?? null, now())
+      .run(id, name, platform ?? null, id, now())
   }
 
   updatePeerMeta(peers: Peer[]): void {
@@ -574,8 +574,10 @@ export class Db {
       .run(localPath, status, now(), id)
   }
 
-  setRelayStatus(id: string, status: MessageStatus): void {
-    this.db.prepare('UPDATE messages SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), id)
+  setRelayStatus(id: string, status: MessageStatus, errorCode?: string): void {
+    this.db
+      .prepare('UPDATE messages SET status = ?, error_code = ?, updated_at = ? WHERE id = ?')
+      .run(status, errorCode ?? null, now(), id)
   }
 
   recallMessage(id: string): void {
@@ -602,6 +604,11 @@ export class Db {
 
   deleteConversation(convId: string): void {
     this.db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(convId)
+    this.db.prepare('DELETE FROM conversations WHERE peer_id = ?').run(convId)
+  }
+
+  // 退群/被踢只摘掉会话条目，消息留着：重新加入时已下载的文件还在本地，不再重下一遍。
+  dropConversation(convId: string): void {
     this.db.prepare('DELETE FROM conversations WHERE peer_id = ?').run(convId)
   }
 

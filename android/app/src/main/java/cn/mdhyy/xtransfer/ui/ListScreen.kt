@@ -164,6 +164,7 @@ fun ListScreen(
     muted: Set<String>,
     pinned: Set<String>,
     peakSpeeds: Map<String, Long>,
+    testedPeaks: Map<String, Long>,
     lanOffline: Boolean,
     scope: CoroutineScope,
     onOpenConv: (String) -> Unit,
@@ -353,6 +354,9 @@ fun ListScreen(
         relayState.connecting -> "正在连接"
         else -> "未连接"
     }
+    // 只在真正发起连接时提示；等待重连的间隙不挂在这里。
+    val relayBusy = relayState.connecting && relayState.error.isNullOrEmpty()
+    val relayShown = relayState.connected || relayBusy
 
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
@@ -513,6 +517,19 @@ fun ListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 32.dp)
             ) {
+            // 分隔线只画在组内设备之间，每组最后一行不画。
+            val lastPinnedConvId = (
+                pinnedBlePending.lastOrNull()
+                    ?: pinnedBleDeviceRows.lastOrNull()?.first
+                    ?: pinnedDevices.lastOrNull()
+                )?.id
+            val lastDirectAddr = direct.devices.lastOrNull()?.address
+            val lastBleConvId = (
+                normalBlePending.lastOrNull()
+                    ?: normalBleDeviceRows.lastOrNull()?.first
+                )?.id
+            val lastLanConvId = lanConvs.lastOrNull()?.id
+            val lastRelayConvId = relayRows.lastOrNull()?.id
             val hasPinned = pinnedDevices.isNotEmpty() ||
                 pinnedBleDeviceRows.isNotEmpty() || pinnedBlePending.isNotEmpty()
             if (hasPinned) {
@@ -546,7 +563,8 @@ fun ListScreen(
                     },
                     onClear = { pendingClear = conv },
                     onDelete = { pendingDelete = conv },
-                    onShowInfo = { showInfo(conv) }
+                    onShowInfo = { showInfo(conv) },
+                    divider = conv.id != lastPinnedConvId
                 )
             }
             items(pinnedBleDeviceRows, key = { "pin-ble-${it.second.id}" }) { (conv, device) ->
@@ -582,7 +600,8 @@ fun ListScreen(
                     },
                     onClear = { pendingClear = conv },
                     onDelete = { pendingDelete = conv },
-                    onShowInfo = { showInfo(conv) }
+                    onShowInfo = { showInfo(conv) },
+                    divider = conv.id != lastPinnedConvId
                 )
             }
             items(pinnedBlePending, key = { "pin-blec-${it.id}" }) { conv ->
@@ -609,7 +628,8 @@ fun ListScreen(
                     },
                     onClear = { pendingClear = conv },
                     onDelete = { pendingDelete = conv },
-                    onShowInfo = { showInfo(conv) }
+                    onShowInfo = { showInfo(conv) },
+                    divider = conv.id != lastPinnedConvId
                 )
             }
             }
@@ -625,7 +645,8 @@ fun ListScreen(
                         device = device,
                         connecting = direct.connectingAddress == device.address,
                         connected = direct.connected && direct.peerAddress == device.address,
-                        onClick = { wifiDirect.connect(device.address) }
+                        onClick = { wifiDirect.connect(device.address) },
+                        divider = device.address != lastDirectAddr
                     )
                 }
             }
@@ -671,7 +692,8 @@ fun ListScreen(
                         },
                         onClear = { pendingClear = conv },
                         onDelete = { pendingDelete = conv },
-                        onShowInfo = { showInfo(conv) }
+                        onShowInfo = { showInfo(conv) },
+                        divider = conv.id != lastBleConvId
                     )
                 }
                 items(normalBlePending, key = { "blec-${it.id}" }) { conv ->
@@ -700,7 +722,8 @@ fun ListScreen(
                         },
                         onClear = { pendingClear = conv },
                         onDelete = { pendingDelete = conv },
-                        onShowInfo = { showInfo(conv) }
+                        onShowInfo = { showInfo(conv) },
+                        divider = conv.id != lastBleConvId
                     )
                 }
             }
@@ -751,10 +774,11 @@ fun ListScreen(
                     },
                     onShowInfo = {
                         if (!isPublicConv) showInfo(conv)
-                    }
+                    },
+                    divider = conv.id != lastLanConvId
                 )
             }
-            if (relayState.connected) {
+            if (relayShown) {
                 item(key = "relay-label") {
                     SectionLabelWithAction(text = "公网") {
                         IconButton(
@@ -774,35 +798,63 @@ fun ListScreen(
                     }
                     Spacer(Modifier.height(1.dp))
                 }
-                items(relayRows, key = { "relay-${it.id}" }) { conv ->
-                    val isRelayPublic = conv.id == RELAY_CONVERSATION_PREFIX + RELAY_PUBLIC_ROOM_ID
-                    ConversationRow(
-                        conv = conv.copy(online = relayState.connected),
-                        preview = previewOf(latest[conv.id]).ifBlank { relayStatus },
-                        isPublic = false,
-                        blocked = false,
-                        muted = conv.id in muted,
-                        pinned = false,
-                        isRelay = true,
-                        isRelayPublic = isRelayPublic,
-                        onClick = { onOpenConv(conv.id) },
-                        onToggleBlock = {},
-                        onToggleMute = {
-                            scope.launch { repo.setMuted(conv.id, conv.id !in muted) }
-                        },
-                        onTogglePin = {},
-                        onSetAlias = {},
-                        onClear = { pendingClear = conv },
-                        onDelete = {},
-                        onShowInfo = {}
-                    )
+                if (!relayState.connected) {
+                    item(key = "relay-connecting") {
+                        Box(Modifier.animateItem()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "正在连接",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(relayRows, key = { "relay-${it.id}" }) { conv ->
+                        val isRelayPublic =
+                            conv.id == RELAY_CONVERSATION_PREFIX + RELAY_PUBLIC_ROOM_ID
+                        Column(Modifier.animateItem()) {
+                            ConversationRow(
+                                conv = conv.copy(online = relayState.connected),
+                                preview = previewOf(latest[conv.id]).ifBlank { relayStatus },
+                                isPublic = false,
+                                blocked = false,
+                                muted = conv.id in muted,
+                                pinned = false,
+                                isRelay = true,
+                                isRelayPublic = isRelayPublic,
+                                onClick = { onOpenConv(conv.id) },
+                                onToggleBlock = {},
+                                onToggleMute = {
+                                    scope.launch { repo.setMuted(conv.id, conv.id !in muted) }
+                                },
+                                onTogglePin = {},
+                                onSetAlias = {},
+                                onClear = { pendingClear = conv },
+                                onDelete = {},
+                                onShowInfo = {},
+                                divider = conv.id != lastRelayConvId
+                            )
+                        }
+                    }
                 }
             }
             if (online.isEmpty() && offline.isEmpty() && pinnedDevices.isEmpty() &&
                 direct.devices.isEmpty() && !direct.connected &&
                 normalBleDeviceRows.isEmpty() && normalBlePending.isEmpty() &&
                 pinnedBleDeviceRows.isEmpty() && pinnedBlePending.isEmpty() &&
-                !relayState.connected
+                !relayShown
             ) {
                 item(key = "empty") {
                     EmptyDevices()
@@ -921,6 +973,7 @@ fun ListScreen(
             target = info,
             repo = repo,
             historyPeak = peakSpeeds[info.id] ?: 0L,
+            testedPeak = testedPeaks[info.id] ?: 0L,
             onDismiss = { infoTarget = null }
         )
     }
@@ -1170,7 +1223,8 @@ private fun WifiDirectRow(
     device: WifiDirectDevice,
     connecting: Boolean,
     connected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    divider: Boolean = true
 ) {
     Row(
         modifier = Modifier
@@ -1207,13 +1261,15 @@ private fun WifiDirectRow(
             )
         }
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 72.dp)
-            .height(1.dp)
-            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-    )
+    if (divider) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 72.dp)
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        )
+    }
 }
 
 @Composable
@@ -1221,24 +1277,20 @@ private fun DeviceInfoDialog(
     target: DeviceInfoTarget,
     repo: Repository,
     historyPeak: Long,
+    testedPeak: Long,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var testing by remember { mutableStateOf(false) }
     var live by remember { mutableLongStateOf(0L) }
-    var testAvg by remember { mutableLongStateOf(0L) }
-    var tested by remember { mutableStateOf(false) }
+    var peak by remember { mutableLongStateOf(maxOf(historyPeak, testedPeak)) }
 
-    val peak = when {
-        testing -> live
-        tested -> testAvg
-        else -> historyPeak
-    }
+    val shownPeak = if (testing) live else peak
     val peakText = when {
-        testing && live == 0L -> "测试中"
-        peak > 0 -> "${formatSize(peak)}/s"
-        else -> "未进行测试"
+        testing && shownPeak == 0L -> "测试中"
+        shownPeak > 0 -> "${formatSize(shownPeak)}/s"
+        else -> "未测试"
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1285,8 +1337,14 @@ private fun DeviceInfoDialog(
                         scope.launch {
                             try {
                                 val result = repo.speedTest(target.id) { sample -> live = sample }
-                                testAvg = result.peak
-                                tested = true
+                                if (result.peak > 0) {
+                                    if (result.peak > peak) peak = result.peak
+                                    val store = repo.settingsStore()
+                                    store.update(
+                                        speedPeaks = store.settings.value.speedPeaks +
+                                            (target.id to maxOf(peak, result.peak))
+                                    )
+                                }
                             } catch (error: Exception) {
                                 context.showError(error.message ?: "测试失败")
                             } finally {
@@ -1320,24 +1378,32 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+// 与 Windows 端一致的合并徽章：#34·3、BLE·5，没有未读时只显示标签。
 @Composable
-private fun IpBadge(addr: String?) {
-    val segment = addr?.substringAfterLast('.')?.takeIf { it.isNotBlank() } ?: return
-    TextBadge("#$segment")
-}
-
-@Composable
-private fun TextBadge(text: String) {
+private fun RowBadge(label: String?, count: Int) {
+    if (label == null && count <= 0) return
+    val text = if (label != null) {
+        if (count > 0) "$label·${if (count > 99) "99+" else count}" else label
+    } else {
+        if (count > 99) "99+" else count.toString()
+    }
+    val unread = count > 0
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .height(20.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (unread) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+            )
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (unread) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.primary
         )
     }
 }
@@ -1380,7 +1446,8 @@ private fun ConversationRow(
     onSetAlias: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
-    onShowInfo: () -> Unit
+    onShowInfo: () -> Unit,
+    divider: Boolean = true
 ) {
     val haptic = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -1442,27 +1509,14 @@ private fun ConversationRow(
         }
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
-            when {
-                isRelay -> TextBadge("公网")
-                conv.id.startsWith(BLE_CONVERSATION_PREFIX) -> TextBadge("BLE")
-                else -> IpBadge(conv.addr)
+            val label = when {
+                isRelay -> null
+                conv.id.startsWith(BLE_CONVERSATION_PREFIX) -> "BLE"
+                else -> conv.addr?.substringAfterLast('.')
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "#$it" }
             }
-            if (conv.unread > 0) {
-                Spacer(Modifier.height(4.dp))
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (conv.unread > 99) "99+" else conv.unread.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                }
-            }
+            RowBadge(label, conv.unread)
         }
     }
         if (menuOpen) {
@@ -1542,13 +1596,15 @@ private fun ConversationRow(
         }
         }
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 72.dp)
-            .height(1.dp)
-            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-    )
+    if (divider) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 72.dp)
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        )
+    }
 }
 
 @Composable

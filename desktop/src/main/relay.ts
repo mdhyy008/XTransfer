@@ -9,6 +9,8 @@ const PUBLIC_ROOM_NAME = '公网广播'
 const RECONNECT_MIN = 2000
 const RECONNECT_MAX = 30000
 const ACK_TIMEOUT = 15000
+const ACK_TIMEOUT_DETAIL =
+  '发送超时：15 秒内没有收到服务器确认，请检查网络后重试（错误码：ACK_TIMEOUT）'
 const DEVICE_FILE = 'relay-device'
 
 type ServerRoom = {
@@ -233,7 +235,7 @@ export class RelayService {
       status: 'sending',
       createdAt: now()
     })
-    this.trackAck(id, () => this.options.db.setRelayStatus(id, 'failed'))
+    this.trackAck(id, () => this.options.db.setRelayStatus(id, 'failed', ACK_TIMEOUT_DETAIL))
     this.send({ type: 'send', id, room: roomId, kind: 'text', body: text })
     this.options.onChange()
   }
@@ -275,7 +277,7 @@ export class RelayService {
       try {
         const fileId = await this.upload(sourcePath, name)
         this.options.db.setRelayFileId(id, fileId)
-        this.trackAck(id, () => this.options.db.setRelayStatus(id, 'failed'))
+        this.trackAck(id, () => this.options.db.setRelayStatus(id, 'failed', ACK_TIMEOUT_DETAIL))
         this.send({
           type: 'send',
           id,
@@ -285,7 +287,8 @@ export class RelayService {
         })
         sent += 1
       } catch (error) {
-        this.options.db.setRelayStatus(id, 'failed')
+        const detail = error instanceof Error && error.message ? error.message : '未知错误'
+        this.options.db.setRelayStatus(id, 'failed', `文件上传失败：${detail}（错误码：UPLOAD_FAILED）`)
         this.options.onChange()
         throw error
       }
@@ -300,7 +303,7 @@ export class RelayService {
 
   kick(roomId: string, deviceId: string): void {
     if (!roomId || !deviceId) return
-    this.send({ type: 'kick', room: roomId, target: deviceId })
+    this.send({ type: 'kick', room: roomId, deviceId })
   }
 
   rename(roomId: string, name: string): void {
@@ -586,7 +589,7 @@ export class RelayService {
     if (!roomId) return
     this.rooms = this.rooms.filter((room) => room.id !== roomId)
     delete this.members[roomId]
-    this.options.db.deleteConversation(`relay:${roomId}`)
+    this.options.db.dropConversation(`relay:${roomId}`)
     this.emit()
     this.options.onChange()
   }
@@ -691,8 +694,9 @@ export class RelayService {
     try {
       const target = await this.fetchTo(fileId, name, this.options.recvDir())
       this.options.db.setRelayFile(id, target, 'done')
-    } catch {
-      this.options.db.setRelayStatus(id, 'failed')
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? error.message : '未知错误'
+      this.options.db.setRelayStatus(id, 'failed', `文件下载失败：${detail}（错误码：DOWNLOAD_FAILED）`)
     } finally {
       this.downloading.delete(id)
       this.options.onChange()
@@ -833,7 +837,11 @@ export class RelayService {
   private failPending(): void {
     for (const [id, timer] of this.pending) {
       clearTimeout(timer)
-      this.options.db.setRelayStatus(id, 'failed')
+      this.options.db.setRelayStatus(
+        id,
+        'failed',
+        '与服务器的连接已断开，消息没有发出（错误码：DISCONNECTED）'
+      )
     }
     this.pending.clear()
     if (this.pendingJoin) {
@@ -894,7 +902,7 @@ export class RelayService {
     for (const conv of this.options.db.listConversations()) {
       if (!conv.id.startsWith('relay:')) continue
       if (ids.has(conv.id.slice('relay:'.length))) continue
-      this.options.db.deleteConversation(conv.id)
+      this.options.db.dropConversation(conv.id)
     }
   }
 

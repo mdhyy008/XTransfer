@@ -43,11 +43,11 @@ func main() {
 	dataDir := flag.String("data", "data", "数据目录（SQLite 与文件都放在这里）")
 	publicURL := flag.String("public-url", "", "对外访问地址，例如 https://chat.example.com")
 	keyFlag := flag.String("key", "", "访问密钥；不填则自动生成并保存在数据目录")
-	maxFileMB := flag.Int64("max-file-mb", 20, "单个文件大小上限（MB）")
+	maxFileMB := flag.Int64("max-file-mb", 10, "单个文件大小上限（MB）")
 	flag.Parse()
 
 	if *maxFileMB <= 0 {
-		*maxFileMB = 20
+		*maxFileMB = 10
 	}
 
 	absData, err := filepath.Abs(*dataDir)

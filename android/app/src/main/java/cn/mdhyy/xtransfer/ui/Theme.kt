@@ -1,20 +1,29 @@
 package cn.mdhyy.xtransfer.ui
 
 import android.app.Activity
+import android.app.WallpaperManager
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.Font
@@ -126,20 +135,162 @@ private val seeds = mapOf(
     )
 )
 
+// MD 常见色系只存一个种子色，整套明暗色调按它派生，免得手写几十个色值还容易偏。
+private val extraSeeds = mapOf(
+    "teal" to Color(0xFF006A6A),
+    "pink" to Color(0xFF984061),
+    "red" to Color(0xFFBA1A1A),
+    "indigo" to Color(0xFF4355B9),
+    "yellow" to Color(0xFF6C5D00),
+    "grey" to Color(0xFF5D5F5F)
+)
+
+private fun hsvColor(hue: Float, saturation: Float, value: Float): Color =
+    Color(
+        android.graphics.Color.HSVToColor(
+            floatArrayOf(hue, saturation.coerceIn(0f, 1f), value.coerceIn(0f, 1f))
+        )
+    )
+
+private fun buildSeedTone(seed: Color): SeedTone {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(seed.toArgb(), hsv)
+    val h = hsv[0]
+    val s = hsv[1].coerceIn(0.02f, 1f)
+
+    fun tone(hue: Float, saturation: Float, value: Float): Color =
+        hsvColor(hue, saturation, value)
+
+    return SeedTone(
+        lightPrimary = tone(h, s * 0.85f, 0.46f),
+        lightOnPrimary = Color.White,
+        lightContainer = tone(h, s * 0.45f, 0.93f),
+        lightOnContainer = tone(h, s * 0.9f, 0.16f),
+        darkPrimary = tone(h, s * 0.55f, 0.82f),
+        darkOnPrimary = tone(h, s * 0.9f, 0.16f),
+        darkContainer = tone(h, s * 0.5f, 0.30f),
+        darkOnContainer = tone(h, s * 0.5f, 0.92f),
+        lightSurface = SurfaceTone(
+            surface = tone(h, 0.10f, 0.99f),
+            containerLowest = Color.White,
+            containerLow = tone(h, 0.12f, 0.975f),
+            container = tone(h, 0.12f, 0.965f),
+            containerHigh = tone(h, 0.12f, 0.945f),
+            onSurface = tone(h, 0.10f, 0.12f),
+            onSurfaceVariant = tone(h, 0.08f, 0.32f),
+            outline = tone(h, 0.06f, 0.50f),
+            outlineVariant = tone(h, 0.06f, 0.78f),
+            secondaryContainer = tone(h, s * 0.5f, 0.90f),
+            onSecondaryContainer = tone(h, s * 0.6f, 0.14f)
+        ),
+        darkSurface = SurfaceTone(
+            surface = tone(h, 0.14f, 0.075f),
+            containerLowest = tone(h, 0.14f, 0.055f),
+            containerLow = tone(h, 0.14f, 0.10f),
+            container = tone(h, 0.13f, 0.125f),
+            containerHigh = tone(h, 0.13f, 0.16f),
+            onSurface = tone(h, 0.06f, 0.90f),
+            onSurfaceVariant = tone(h, 0.06f, 0.70f),
+            outline = tone(h, 0.06f, 0.56f),
+            outlineVariant = tone(h, 0.07f, 0.28f),
+            secondaryContainer = tone(h, s * 0.35f, 0.28f),
+            onSecondaryContainer = tone(h, s * 0.5f, 0.90f)
+        )
+    )
+}
+
+private val generatedTones: Map<String, SeedTone> by lazy {
+    extraSeeds.mapValues { (_, seed) -> buildSeedTone(seed) }
+}
+
+private fun toneOf(seed: String): SeedTone =
+    seeds[seed] ?: generatedTones[seed] ?: seeds.getValue("green")
+
 val seedNames = listOf(
+    "green" to "绿",
     "purple" to "紫",
     "blue" to "蓝",
-    "green" to "绿",
-    "orange" to "橙"
+    "orange" to "橙",
+    "teal" to "青",
+    "pink" to "粉",
+    "red" to "红",
+    "indigo" to "靛",
+    "yellow" to "黄",
+    "grey" to "灰"
 )
 
 fun seedColor(seed: String, dark: Boolean): Color {
-    val tone = seeds[seed] ?: seeds.getValue("purple")
+    val tone = toneOf(seed)
     return if (dark) tone.darkPrimary else tone.lightPrimary
 }
 
-private fun scheme(seed: String, dark: Boolean): ColorScheme {
-    val tone = seeds[seed] ?: seeds.getValue("purple")
+fun seedDisplayName(seed: String): String =
+    if (seed == "wallpaper") {
+        "壁纸"
+    } else {
+        seedNames.firstOrNull { it.first == seed }?.second ?: "绿"
+    }
+
+private fun wallpaperTint(context: Context): Color? {
+    return runCatching {
+        val drawable = WallpaperManager.getInstance(context).drawable
+            ?: return@runCatching null
+        val srcWidth = drawable.intrinsicWidth.coerceAtLeast(1)
+        val srcHeight = drawable.intrinsicHeight.coerceAtLeast(1)
+        val scale = 32f / maxOf(srcWidth, srcHeight)
+        val width = (srcWidth * scale).toInt().coerceAtLeast(1)
+        val height = (srcHeight * scale).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(Canvas(bitmap))
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        bitmap.recycle()
+        val hsv = FloatArray(3)
+        var best = 0
+        var bestScore = 0f
+        for (pixel in pixels) {
+            if (android.graphics.Color.alpha(pixel) < 200) continue
+            android.graphics.Color.colorToHSV(pixel, hsv)
+            val score = hsv[1] * hsv[2]
+            if (score > bestScore) {
+                bestScore = score
+                best = pixel
+            }
+        }
+        if (bestScore <= 0.01f) null else Color(best)
+    }.getOrNull()
+}
+
+fun wallpaperPreviewColor(context: Context, dark: Boolean): Color {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        runCatching {
+            val scheme =
+                if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            return scheme.primary
+        }
+    }
+    val tone = wallpaperTint(context)?.let { buildSeedTone(it) } ?: seeds.getValue("green")
+    return if (dark) tone.darkPrimary else tone.lightPrimary
+}
+
+private fun wallpaperScheme(context: Context, dark: Boolean): ColorScheme {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        runCatching {
+            return if (dark) {
+                dynamicDarkColorScheme(context)
+            } else {
+                dynamicLightColorScheme(context)
+            }
+        }
+    }
+    val tone = wallpaperTint(context)?.let { buildSeedTone(it) } ?: seeds.getValue("green")
+    return toneScheme(tone, dark)
+}
+
+private fun scheme(seed: String, dark: Boolean): ColorScheme = toneScheme(toneOf(seed), dark)
+
+private fun toneScheme(tone: SeedTone, dark: Boolean): ColorScheme {
     val surface = if (dark) tone.darkSurface else tone.lightSurface
     return if (dark) {
         darkColorScheme(
@@ -227,7 +378,10 @@ fun XTransferTheme(mode: String, seed: String, misans: Boolean = true, content: 
         "dark" -> true
         else -> isSystemInDarkTheme()
     }
-    val colors = scheme(seed, dark)
+    val context = LocalContext.current
+    val colors = remember(seed, dark) {
+        if (seed == "wallpaper") wallpaperScheme(context, dark) else scheme(seed, dark)
+    }
     val xt = XtColors(
         success = if (dark) Color(0xFF81C784) else Color(0xFF2E7D32),
         warning = if (dark) Color(0xFFFFD54F) else Color(0xFFF9A825),

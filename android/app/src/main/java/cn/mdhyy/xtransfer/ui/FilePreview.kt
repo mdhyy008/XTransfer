@@ -91,6 +91,13 @@ private val TEXT_EXTS = setOf(
 private val AUDIO_EXTS = setOf("mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "wma")
 private val VIDEO_EXTS = setOf("mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv", "flv", "ts", "mpg", "mpeg", "3gp")
 private val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif")
+private val INSTALL_EXTS = setOf(
+    "apk", "apks", "xapk", "aab",
+    "hap", "app", "ipa",
+    "appx", "appxbundle", "msix", "msixbundle", "msi", "exe",
+    "dmg", "pkg",
+    "deb", "rpm", "appimage"
+)
 
 fun extensionOf(name: String): String =
     name.substringAfterLast('.', "").lowercase()
@@ -317,7 +324,7 @@ fun fileKindLabel(name: String): String = when (extensionOf(name)) {
     in VIDEO_EXTS -> "视频"
     in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz") -> "压缩包"
     "pdf" -> "PDF"
-    "apk" -> "安装包"
+    in INSTALL_EXTS -> "安装包"
     in setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "csv") -> "文档"
     else -> "文件"
 }
@@ -328,7 +335,7 @@ fun fileTypeIcon(name: String): androidx.compose.ui.graphics.vector.ImageVector 
     extensionOf(name) in VIDEO_EXTS -> Icons.Rounded.Movie
     extensionOf(name) in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz") -> Icons.Rounded.FolderZip
     extensionOf(name) == "pdf" -> Icons.Rounded.PictureAsPdf
-    extensionOf(name) == "apk" -> Icons.Rounded.Android
+    extensionOf(name) in INSTALL_EXTS -> Icons.Rounded.Android
     extensionOf(name) in setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "csv") ->
         Icons.Rounded.Description
     else -> Icons.Rounded.InsertDriveFile

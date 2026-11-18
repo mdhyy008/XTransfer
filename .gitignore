@@ -30,6 +30,7 @@ desktop/resources/xlan/*
 relay/xlan-relay.exe
 relay/xlan-relay.exe~*
 relay/xlan-relay
+relay/xlan_relay_*
 relay/data/
 
 # 其他

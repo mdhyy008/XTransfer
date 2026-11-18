@@ -58,6 +58,7 @@ const api: XtApi = {
   pickMedia: () => ipcRenderer.invoke('files:pickMedia') as Promise<FileEntry[]>,
   pickFolder: () => ipcRenderer.invoke('files:pickFolder') as Promise<FileEntry | null>,
   inspectPaths: (paths: string[]) => ipcRenderer.invoke('files:inspect', paths) as Promise<FileEntry[]>,
+  pasteImage: () => ipcRenderer.invoke('files:pasteImage') as Promise<FileEntry | null>,
   listDir: (dir: string) => ipcRenderer.invoke('files:listDir', dir) as Promise<FileEntry[]>,
   renamePath: (path: string, name: string) =>
     ipcRenderer.invoke('files:rename', path, name) as Promise<string>,
@@ -170,6 +171,7 @@ const api: XtApi = {
   toggleMaximize: () => ipcRenderer.send('win:toggleMaximize'),
   close: () => ipcRenderer.send('win:close'),
   version: () => ipcRenderer.invoke('app:version'),
+  accentColor: () => ipcRenderer.invoke('app:accentColor') as Promise<string>,
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url) as Promise<void>
 }
 

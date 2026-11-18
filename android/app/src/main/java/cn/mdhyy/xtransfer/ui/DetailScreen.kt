@@ -90,6 +90,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -116,7 +117,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -124,6 +127,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -144,9 +148,12 @@ import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_ID
 import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_NAME
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.ServiceStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -157,6 +164,38 @@ private const val TIME_GAP_SECONDS = 5 * 60L
 
 private val BUCKET_TYPE_ORDER =
     listOf("图片", "视频", "音频", "文档", "PDF", "压缩包", "安装包", "文件", "文件夹")
+
+private val TEXT_LINK_REGEX =
+    Regex("""\b(?:https?://|mailto:|tel:)[^\s<>"']+""", RegexOption.IGNORE_CASE)
+private val TEXT_LINK_TRAILING = Regex("""[,，。、；：！？…）】》”’"'.,!?;:)\]}]+$""")
+
+private fun parseTextLinks(text: String): List<IntRange> {
+    if (text.isEmpty()) return emptyList()
+    return TEXT_LINK_REGEX.findAll(text).mapNotNull { match ->
+        val href = match.value.replace(TEXT_LINK_TRAILING, "")
+        if (href.isEmpty()) null else match.range.first until (match.range.first + href.length)
+    }.toList()
+}
+
+private fun buildLinkAnnotated(
+    body: String,
+    links: List<IntRange>,
+    linkColor: Color
+): AnnotatedString = buildAnnotatedString {
+    var last = 0
+    links.forEach { range ->
+        if (range.first > last) append(body.substring(last, range.first))
+        withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
+            append(body.substring(range.first, range.last + 1))
+        }
+        last = range.last + 1
+    }
+    if (last < body.length) append(body.substring(last))
+}
+
+private fun openExternalLink(context: Context, href: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(href))) }
+}
 
 @Composable
 fun DetailScreen(
@@ -189,6 +228,10 @@ fun DetailScreen(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val isPublic = convId == PUBLIC_CONVERSATION_ID
+    val uiPrefs = remember { context.getSharedPreferences("xt_ui", Context.MODE_PRIVATE) }
+    var publicBannerVisible by remember(convId) {
+        mutableStateOf(isPublic && !uiPrefs.getBoolean("public_banner_dismissed", false))
+    }
     val isBle = convId.startsWith(BLE_CONVERSATION_PREFIX)
     val isRelay = convId.startsWith(RELAY_CONVERSATION_PREFIX)
     val relayRoomId = if (isRelay) convId.removePrefix(RELAY_CONVERSATION_PREFIX) else ""
@@ -295,12 +338,16 @@ fun DetailScreen(
     var shownCount by remember(convId) { mutableIntStateOf(messages.size) }
     val newest = ordered.firstOrNull()
     val newestIsFile = newest?.let { it.kind != "text" } == true
-    LaunchedEffect(convId, messages.size, newest?.id, newest?.status) {
-        repo.markRead(convId)
-        // 翻历史时不打断；收发文件、以及最新的文件传完时都要跟到底部。
+    LaunchedEffect(convId, messages.size) { repo.markRead(convId) }
+    // 批量传文件时，完成的往往不是最新一条；消息数据一有变化就检查一次要不要贴底。
+    LaunchedEffect(convId, messages) {
+        // 翻历史时不打断；贴底或新来文件时都跟到最底部。
         val added = messages.size > shownCount
         if ((added && newestIsFile) || listState.firstVisibleItemIndex <= 1) {
-            listState.animateScrollToItem(0)
+            listState.scrollToItem(0)
+            // 文件卡片的完成态、缩略图要过一会儿高度才稳定，随后再补一次。
+            delay(80)
+            listState.scrollToItem(0)
         }
         shownCount = messages.size
     }
@@ -332,6 +379,15 @@ fun DetailScreen(
     var saveTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var viewConfirm by remember { mutableStateOf<MessageEntity?>(null) }
     var errorTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    // 公网文件下载中转圈；换会话或离开页面时这次打开作废，下载完也不再弹预览。
+    var openingFile by remember(convId) { mutableStateOf(false) }
+    val openJob = remember(convId) { mutableStateOf<Job?>(null) }
+    DisposableEffect(convId) {
+        onDispose {
+            openJob.value?.cancel()
+            openJob.value = null
+        }
+    }
     var membersOpen by remember { mutableStateOf(false) }
     var roomInfoOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
@@ -402,12 +458,19 @@ fun DetailScreen(
     }
 
     val cacheAndOpen: (MessageEntity) -> Unit = { message ->
-        scope.launch {
-            runCatching { repo.relayCacheFile(message) }
-                .onSuccess { file ->
-                    openLocalFile(message.copy(localPath = file.absolutePath, status = "done"))
-                }
-                .onFailure { context.showError(it.message ?: "查看失败") }
+        openJob.value?.cancel()
+        openingFile = true
+        openJob.value = scope.launch {
+            try {
+                val file = repo.relayCacheFile(message)
+                openLocalFile(message.copy(localPath = file.absolutePath, status = "done"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                context.showError(e.message ?: "查看失败")
+            } finally {
+                if (isActive) openingFile = false
+            }
         }
     }
 
@@ -519,6 +582,7 @@ fun DetailScreen(
             .onFailure { context.showError("无法打开相机") }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -623,7 +687,7 @@ fun DetailScreen(
                             .height(20.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(
-                                if (active) LocalXtColors.current.success
+                                if (active) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.surfaceContainerHighest
                             )
                             .then(
@@ -647,7 +711,7 @@ fun DetailScreen(
                                     else -> Icons.Rounded.Wifi
                                 },
                                 contentDescription = null,
-                                tint = if (active) Color.White
+                                tint = if (active) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(13.dp)
                             )
@@ -923,6 +987,45 @@ fun DetailScreen(
                 .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         )
 
+        if (isPublic && publicBannerVisible) {
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Info,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "不要在这个频道发送私密信息，消息可能会同步到其他设备",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = {
+                            publicBannerVisible = false
+                            uiPrefs.edit().putBoolean("public_banner_dismissed", true).apply()
+                        }
+                    ) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "关闭",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+            }
+        }
+
         LanOfflineBox(
             offline = offline && !isBle && !isRelay,
             modifier = Modifier
@@ -1166,6 +1269,25 @@ fun DetailScreen(
         }
         }
         }
+    }
+
+    if (openingFile) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .background(MaterialTheme.colorScheme.surface, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(30.dp), strokeWidth = 3.dp)
+            }
+        }
+    }
     }
 
     if (attachOpen) {
@@ -1607,15 +1729,27 @@ fun DetailScreen(
                 }
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        errorTarget = null
-                        scope.launch {
-                            runCatching { repo.retrySend(failing) }
-                                .onFailure { context.showError(it.message ?: "重试失败") }
+                Row {
+                    TextButton(
+                        onClick = {
+                            val detail = failing.errorCode?.takeIf { it.isNotBlank() } ?: "发送失败"
+                            val copied = runCatching {
+                                context.getSystemService(ClipboardManager::class.java)
+                                    ?.setPrimaryClip(ClipData.newPlainText("error", detail)) != null
+                            }.getOrDefault(false)
+                            if (copied) context.toast("已复制") else context.showError("复制失败")
                         }
-                    }
-                ) { Text("重试") }
+                    ) { Text("复制") }
+                    TextButton(
+                        onClick = {
+                            errorTarget = null
+                            scope.launch {
+                                runCatching { repo.retrySend(failing) }
+                                    .onFailure { context.showError(it.message ?: "重试失败") }
+                            }
+                        }
+                    ) { Text("重试") }
+                }
             },
             dismissButton = {
                 TextButton(onClick = { errorTarget = null }) { Text("关闭") }
@@ -1743,6 +1877,8 @@ private fun MessageRow(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val mine = message.direction == "out"
     if (message.recalled) {
         Box(
@@ -1789,6 +1925,16 @@ private fun MessageRow(
             }
         )
     }
+    val bodyText = if (message.kind == "text") message.body.orEmpty() else ""
+    val bodyLinks = remember(bodyText) { parseTextLinks(bodyText) }
+    val annotatedBody = remember(bodyText, mine) {
+        buildLinkAnnotated(
+            bodyText,
+            bodyLinks,
+            if (mine) Color(0xFF9ECBFF) else Color(0xFF1677FF)
+        )
+    }
+    var bodyLayout by remember(message.id) { mutableStateOf<TextLayoutResult?>(null) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1820,13 +1966,6 @@ private fun MessageRow(
                     }
                     Box {
                         Surface(
-                            modifier = Modifier.pointerInput(message.id) {
-                                detectTapGestures(
-                                    onLongPress = { point ->
-                                        openMenuAt(DpOffset(point.x.toDp(), point.y.toDp()))
-                                    }
-                                )
-                            },
                             shape = if (mine) {
                                 RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
                             } else {
@@ -1835,11 +1974,59 @@ private fun MessageRow(
                             color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
                             contentColor = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
                         ) {
-                            Text(
-                                text = message.body.orEmpty(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp)
+                            ) {
+                                Text(
+                                    text = annotatedBody,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    onTextLayout = { bodyLayout = it },
+                                    modifier = Modifier.pointerInput(message.id, bodyLinks) {
+                                        detectTapGestures(
+                                            onTap = { point ->
+                                                val layout = bodyLayout
+                                                val offset = layout?.getOffsetForPosition(point)
+                                                val link = if (offset == null) {
+                                                    null
+                                                } else {
+                                                    bodyLinks.firstOrNull { offset in it }
+                                                }
+                                                if (link != null) {
+                                                    openExternalLink(
+                                                        context,
+                                                        bodyText.substring(link.first, link.last + 1)
+                                                    )
+                                                } else {
+                                                    focusManager.clearFocus()
+                                                    keyboard?.hide()
+                                                }
+                                            },
+                                            onLongPress = { point ->
+                                                openMenuAt(
+                                                    DpOffset(point.x.toDp(), point.y.toDp())
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                                if (mine && message.status == "failed") {
+                                    Spacer(Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clip(CircleShape)
+                                            .clickable { onShowError(message) },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.ErrorOutline,
+                                            contentDescription = "发送失败",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                         MessageMenuSheet(
                             expanded = menuOpen,
@@ -1900,35 +2087,6 @@ private fun MessageRow(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
-                    }
-                }
-            }
-            if (mine && message.kind == "text" && message.status == "failed") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 4.dp)
-                ) {
-                    IconButton(
-                        onClick = { onShowError(message) },
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Icon(
-                            Icons.Rounded.ErrorOutline,
-                            contentDescription = "发送失败",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    Text(
-                        text = "发送失败",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    TextButton(
-                        onClick = { onRetry(message) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("重试", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }

@@ -11,9 +11,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -138,7 +136,8 @@ fun SettingsScreen(
     receivedFiles: Int,
     deviceCount: Int,
     onBack: () -> Unit,
-    onOpenAbout: () -> Unit
+    onOpenAbout: () -> Unit,
+    onOpenTheme: () -> Unit
 ) {
     val context = LocalContext.current
     val appVersion = remember {
@@ -391,13 +390,6 @@ fun SettingsScreen(
         }
     }
 
-    val systemDark = isSystemInDarkTheme()
-    val dark = when (settings.theme) {
-        "light" -> false
-        "dark" -> true
-        else -> systemDark
-    }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
@@ -469,7 +461,7 @@ fun SettingsScreen(
                     SettingRow(
                         icon = Icons.Rounded.Bluetooth,
                         title = "蓝牙广播",
-                        description = "蓝牙 ${bleState.version.ifBlank { "未知" }} · ${if (bleState.address.isBlank()) "MAC地址获取失败" else "MAC ${bleState.address}"}",
+                        description = "蓝牙 ${bleState.version.ifBlank { "未知" }}${if (bleState.address.isBlank()) "" else " · MAC ${bleState.address}"}",
                         onClick = toggleBle,
                         trailing = {
                             SettingSwitch(
@@ -534,10 +526,12 @@ fun SettingsScreen(
                         onModeChange = { store.update(theme = it) }
                     )
                     SettingDivider()
-                    SeedColorRow(
-                        seed = settings.seed,
-                        dark = dark,
-                        onSelect = { store.update(seed = it) }
+                    SettingRow(
+                        icon = Icons.Rounded.Palette,
+                        title = "主题色",
+                        trailingText = seedDisplayName(settings.seed),
+                        showChevron = true,
+                        onClick = onOpenTheme
                     )
                     SettingDivider()
                     SettingRow(
@@ -673,8 +667,6 @@ fun SettingsScreen(
                                 text = recvDir,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             Icon(
@@ -916,14 +908,17 @@ fun SettingsScreen(
                             ConfirmAction.CACHE -> {
                                 cleaning = true
                                 pageScope.launch {
+                                    val before = withContext(Dispatchers.IO) { calcCacheBytes(context, recvDir) }
                                     runCatching { repo.cleanCache() }
                                         .onSuccess {
                                             // 缩略图、相机临时文件也一并清掉。
                                             runCatching {
                                                 context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
                                             }
-                                            cacheBytes = withContext(Dispatchers.IO) { calcCacheBytes(context, recvDir) }
-                                            notify("已清理 ${formatSize(it.freedBytes).ifBlank { "0 B" }}")
+                                            val after = withContext(Dispatchers.IO) { calcCacheBytes(context, recvDir) }
+                                            cacheBytes = after
+                                            // 按前后差报数，和界面上显示的总量对得上。
+                                            notify("已清理 ${formatSize((before - after).coerceAtLeast(0)).ifBlank { "0 B" }}")
                                         }
                                         .onFailure { notify(it.message ?: "清理失败") }
                                     cleaning = false
@@ -1651,48 +1646,6 @@ private fun ThemeModeRow(mode: String, onModeChange: (String) -> Unit) {
                 ) {
                     Text(label, maxLines = 1)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SeedColorRow(seed: String, dark: Boolean, onSelect: (String) -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Rounded.Palette,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(16.dp))
-            Text(
-                text = "主题色",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.padding(start = 40.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            for ((name, _) in seedNames) {
-                val selected = name == seed
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(seedColor(name, dark))
-                        .border(
-                            width = if (selected) 3.dp else 1.dp,
-                            color = if (selected) MaterialTheme.colorScheme.onBackground
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = CircleShape
-                        )
-                        .clickable { onSelect(name) }
-                )
             }
         }
     }

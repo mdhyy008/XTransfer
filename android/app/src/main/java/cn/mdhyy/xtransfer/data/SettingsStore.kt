@@ -10,7 +10,7 @@ import java.security.SecureRandom
 
 data class AppSettings(
     val theme: String = "system",
-    val seed: String = "purple",
+    val seed: String = "wallpaper",
     val notifications: Boolean = true,
     val publicNotifications: Boolean = false,
     val quickPreview: Boolean = true,
@@ -23,7 +23,9 @@ data class AppSettings(
     val muted: Set<String> = emptySet(),
     val pinned: Set<String> = emptySet(),
     // 已删除的设备 → 删除时刻（秒）。设备再次被发现（lastSeen 更新）后自然重新出现。
-    val hidden: Map<String, Long> = emptyMap()
+    val hidden: Map<String, Long> = emptyMap(),
+    // 设备 → 测速历史的峰值（字节/秒），重开弹窗或重启后仍能看到。
+    val speedPeaks: Map<String, Long> = emptyMap()
 )
 
 class SettingsStore(context: Context) {
@@ -31,7 +33,7 @@ class SettingsStore(context: Context) {
     private val _settings = MutableStateFlow(
         AppSettings(
             theme = prefs.getString("theme", "system") ?: "system",
-            seed = prefs.getString("seed", "purple") ?: "purple",
+            seed = prefs.getString("seed", "wallpaper") ?: "wallpaper",
             notifications = prefs.getBoolean("notifications", true),
             publicNotifications = prefs.getBoolean("publicNotifications", false),
             quickPreview = prefs.getBoolean("quickPreview", true),
@@ -43,7 +45,8 @@ class SettingsStore(context: Context) {
             aliases = readAliases(prefs.getString("aliases", null)),
             muted = prefs.getStringSet("muted", emptySet()) ?: emptySet(),
             pinned = prefs.getStringSet("pinned", emptySet()) ?: emptySet(),
-            hidden = readTimeMap(prefs.getString("hidden", null))
+            hidden = readTimeMap(prefs.getString("hidden", null)),
+            speedPeaks = readTimeMap(prefs.getString("speedPeaks", null))
         )
     )
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -62,7 +65,8 @@ class SettingsStore(context: Context) {
         aliases: Map<String, String>? = null,
         muted: Set<String>? = null,
         pinned: Set<String>? = null,
-        hidden: Map<String, Long>? = null
+        hidden: Map<String, Long>? = null,
+        speedPeaks: Map<String, Long>? = null
     ) {
         val current = _settings.value
         val next = current.copy(
@@ -79,7 +83,8 @@ class SettingsStore(context: Context) {
             aliases = aliases ?: current.aliases,
             muted = muted ?: current.muted,
             pinned = pinned ?: current.pinned,
-            hidden = hidden ?: current.hidden
+            hidden = hidden ?: current.hidden,
+            speedPeaks = speedPeaks ?: current.speedPeaks
         )
         prefs.edit()
             .putString("theme", next.theme)
@@ -96,6 +101,7 @@ class SettingsStore(context: Context) {
             .putStringSet("muted", next.muted)
             .putStringSet("pinned", next.pinned)
             .putString("hidden", JSONObject(next.hidden.toMap()).toString())
+            .putString("speedPeaks", JSONObject(next.speedPeaks.toMap()).toString())
             .apply()
         _settings.value = next
     }

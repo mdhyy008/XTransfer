@@ -245,6 +245,14 @@ class LanShareServer(
                 walk(root, item.name.trimEnd('/'), out)
             }
         } else {
+            // 从应用列表导出的安装包是绝对路径，直接按文件读，不能交给 contentResolver。
+            if (item.uri.startsWith("/")) {
+                val file = File(item.uri)
+                if (file.isFile) {
+                    out += ShareEntry(item.name, file.length()) { file.inputStream() }
+                }
+                return
+            }
             val uri = runCatching { Uri.parse(item.uri) }.getOrNull() ?: return
             val known = runCatching {
                 app.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }

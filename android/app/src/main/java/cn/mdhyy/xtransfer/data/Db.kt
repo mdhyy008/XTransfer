@@ -111,6 +111,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun get(id: String): MessageEntity?
 
+    @Query("SELECT MAX(createdAt) FROM messages WHERE conversationId = :convId")
+    suspend fun latestCreatedAt(convId: String): Long?
+
     @Query("SELECT * FROM messages WHERE kind != 'text' AND localPath IS NOT NULL")
     suspend fun allFileMessages(): List<MessageEntity>
 

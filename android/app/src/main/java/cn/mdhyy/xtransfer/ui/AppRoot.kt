@@ -1,6 +1,7 @@
 package cn.mdhyy.xtransfer.ui
 
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
@@ -66,7 +67,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -185,6 +188,43 @@ fun AppRoot(
         }
     }
 
+    // 文件管理器里「复制」的文件会以 content URI 留在剪贴板，本应用在前台读到时系统临时授权。
+    fun pasteFromClipboard() {
+        val clip = runCatching {
+            context.getSystemService(ClipboardManager::class.java)?.primaryClip
+        }.getOrNull()
+        val uris = buildList {
+            if (clip != null) {
+                for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { add(it) }
+            }
+        }
+        if (uris.isEmpty()) {
+            context.toast("剪贴板里没有文件")
+            return
+        }
+        scope.launch {
+            val items = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+                    val readable = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { } != null
+                    }.getOrDefault(false)
+                    if (readable) repo.makeFileItem(uri) else null
+                }
+            }
+            if (items.isEmpty()) {
+                context.showError("无法读取剪贴板里的文件")
+            } else {
+                repo.addBucket(items)
+                context.toast("已加入 ${items.size} 项")
+            }
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris -> addPicked(uris) }
@@ -297,6 +337,7 @@ fun AppRoot(
                             muted = settings.muted,
                             pinned = settings.pinned,
                             peakSpeeds = peakSpeeds,
+                            testedPeaks = settings.speedPeaks,
                             lanOffline = offline,
                             scope = scope,
                             onOpenConv = { id -> nav.navigate("detail/${Uri.encode(id)}") },
@@ -474,7 +515,15 @@ fun AppRoot(
                 receivedFiles = messages.count { it.direction == "in" && it.kind != "text" },
                 deviceCount = conversations.count { it.id != PUBLIC_CONVERSATION_ID },
                 onBack = { nav.popBackStack() },
-                onOpenAbout = { nav.navigate("about") }
+                onOpenAbout = { nav.navigate("about") },
+                onOpenTheme = { nav.navigate("theme") }
+            )
+        }
+        composable("theme") {
+            ThemeScreen(
+                settings = settings,
+                store = repo.settingsStore(),
+                onBack = { nav.popBackStack() }
             )
         }
         composable("about") {
@@ -515,6 +564,7 @@ fun AppRoot(
             onDismiss = { bucketOpen = false },
             onAddFiles = { filePicker.launch(arrayOf("*/*")) },
             onAddFolder = { pickBucketFolder() },
+            onPaste = { pasteFromClipboard() },
             onRemove = { repo.removeBucket(it) },
             onClear = {
                 repo.clearBucket()

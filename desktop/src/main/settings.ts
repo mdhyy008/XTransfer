@@ -1,10 +1,24 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Settings } from '../shared/types'
+import type { SeedColor, Settings } from '../shared/types'
+
+const SEEDS: SeedColor[] = [
+  'system',
+  'green',
+  'purple',
+  'blue',
+  'orange',
+  'teal',
+  'pink',
+  'red',
+  'indigo',
+  'yellow',
+  'grey'
+]
 
 const DEFAULTS: Settings = {
   theme: 'system',
-  seed: 'purple',
+  seed: 'green',
   notifications: true,
   publicNotifications: false,
   closeToTray: true,
@@ -18,7 +32,8 @@ const DEFAULTS: Settings = {
   aliases: {},
   muted: [],
   pinned: [],
-  hidden: {}
+  hidden: {},
+  speedPeaks: {}
 }
 
 type Stored = Settings & { recvDir?: string }
@@ -56,10 +71,7 @@ export class SettingsStore {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Stored>
       this.value = {
         theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
-        seed:
-          raw.seed === 'blue' || raw.seed === 'green' || raw.seed === 'orange'
-            ? raw.seed
-            : 'purple',
+        seed: SEEDS.includes(raw.seed as SeedColor) ? (raw.seed as SeedColor) : 'green',
         notifications: raw.notifications !== false,
         publicNotifications: raw.publicNotifications === true,
         closeToTray: raw.closeToTray !== false,
@@ -73,7 +85,8 @@ export class SettingsStore {
         aliases: aliasMap(raw.aliases),
         muted: strList(raw.muted),
         pinned: strList(raw.pinned),
-        hidden: timeMap(raw.hidden)
+        hidden: timeMap(raw.hidden),
+        speedPeaks: timeMap(raw.speedPeaks)
       }
       this.recvDir = typeof raw.recvDir === 'string' ? raw.recvDir : ''
     } catch {

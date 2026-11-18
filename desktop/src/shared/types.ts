@@ -177,7 +177,18 @@ export type RelayState = {
   members: Record<string, RelayMember[]>
 }
 
-export type SeedColor = 'purple' | 'blue' | 'green' | 'orange'
+export type SeedColor =
+  | 'system'
+  | 'purple'
+  | 'blue'
+  | 'green'
+  | 'orange'
+  | 'teal'
+  | 'pink'
+  | 'red'
+  | 'indigo'
+  | 'yellow'
+  | 'grey'
 export type ThemeMode = 'system' | 'light' | 'dark'
 
 export type Settings = {
@@ -198,6 +209,8 @@ export type Settings = {
   pinned: string[]
   // 已删除的设备 → 删除时刻（秒）。设备再次被发现（last_seen 更新）后自然重新出现。
   hidden: Record<string, number>
+  // 设备 → 测速历史的峰值（字节/秒），重开弹窗或重启后仍能看到。
+  speedPeaks: Record<string, number>
 }
 
 export type AppConfig = {
@@ -317,6 +330,7 @@ export type XtApi = {
   pickMedia: () => Promise<FileEntry[]>
   pickFolder: () => Promise<FileEntry | null>
   inspectPaths: (paths: string[]) => Promise<FileEntry[]>
+  pasteImage: () => Promise<FileEntry | null>
   listDir: (dir: string) => Promise<FileEntry[]>
   renamePath: (path: string, name: string) => Promise<string>
   trashPath: (path: string) => Promise<void>
@@ -378,5 +392,6 @@ export type XtApi = {
   toggleMaximize: () => void
   close: () => void
   version: () => Promise<{ app: string; xlan: string }>
+  accentColor: () => Promise<string>
   openExternal: (url: string) => Promise<void>
 }
