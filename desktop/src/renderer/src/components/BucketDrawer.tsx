@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Box,
   Button,
-  Dialog,
-  DialogContent,
-  DialogTitle,
   Drawer,
   IconButton,
   List,
@@ -23,7 +20,6 @@ import DeleteSweepRounded from '@mui/icons-material/DeleteSweepRounded'
 import DescriptionRounded from '@mui/icons-material/DescriptionRounded'
 import DriveFileMoveRounded from '@mui/icons-material/DriveFileMoveRounded'
 import FolderRounded from '@mui/icons-material/FolderRounded'
-import HelpOutlineRounded from '@mui/icons-material/HelpOutlineRounded'
 import NoteAddRounded from '@mui/icons-material/NoteAddRounded'
 import ScreenshotRounded from '@mui/icons-material/ScreenshotRounded'
 import type { FileEntry } from '../../../shared/types'
@@ -149,9 +145,7 @@ export default function BucketDrawer({
   onRemove,
   onClear
 }: Props) {
-  const [helpOpen, setHelpOpen] = useState(false)
   return (
-    <>
     <Drawer
       anchor="right"
       open={open}
@@ -169,11 +163,6 @@ export default function BucketDrawer({
     >
       <Box sx={{ display: 'flex', alignItems: 'center', px: 2.5, py: 1.5 }}>
         <Typography sx={{ flex: 1, fontSize: 16, fontWeight: 600 }}>暂存桶</Typography>
-        <Tooltip title="帮助">
-          <IconButton size="small" onClick={() => setHelpOpen(true)}>
-            <HelpOutlineRounded fontSize="small" />
-          </IconButton>
-        </Tooltip>
         {entries.length > 0 && (
           <Tooltip title="清空">
             <IconButton size="small" onClick={onClear}>
@@ -270,27 +259,5 @@ export default function BucketDrawer({
         )}
       </List>
     </Drawer>
-
-    <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontSize: 16, fontWeight: 600, pb: 0.5 }}>存入暂存桶</DialogTitle>
-      <DialogContent sx={{ pt: 1, pb: 2 }}>
-        <List disablePadding>
-          {BUCKET_TIPS.map((item) => (
-            <ListItem key={item.title} disableGutters sx={{ py: 0.75 }}>
-              <ListItemIcon sx={{ minWidth: 40, color: 'text.secondary' }}>{item.icon}</ListItemIcon>
-              <ListItemText
-                primary={item.title}
-                secondary={item.detail}
-                slotProps={{
-                  primary: { sx: { fontSize: 14 } },
-                  secondary: { sx: { fontSize: 12 } }
-                }}
-              />
-            </ListItem>
-          ))}
-        </List>
-      </DialogContent>
-    </Dialog>
-    </>
   )
 }

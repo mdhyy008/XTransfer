@@ -3,18 +3,25 @@ import {
   Box,
   Button,
   ButtonBase,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
+  IconButton,
   InputAdornment,
   Menu,
   MenuItem,
   TextField,
+  Tooltip,
   Typography
 } from '@mui/material'
+import ChecklistRounded from '@mui/icons-material/ChecklistRounded'
+import CloseRounded from '@mui/icons-material/CloseRounded'
+import DeleteRounded from '@mui/icons-material/DeleteRounded'
+import DoneAllRounded from '@mui/icons-material/DoneAllRounded'
 import FolderRounded from '@mui/icons-material/FolderRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import type { FileEntry } from '../../../shared/types'
@@ -127,6 +134,9 @@ export default function FileManager({
   const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null)
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const aliveRef = useRef(true)
 
   const load = useCallback((): void => {
@@ -178,6 +188,49 @@ export default function FileManager({
     return [...map.entries()]
   }, [entries, category, query])
 
+  // 文件被外部删除/改名后，把选中集合里已经不存在的路径剔掉。
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev
+      const alive = new Set(entries.map((entry) => entry.path))
+      const next = new Set([...prev].filter((path) => alive.has(path)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [entries])
+
+  const visibleEntries = useMemo(() => groups.flatMap(([, list]) => list), [groups])
+
+  const exitSelection = (): void => {
+    setSelecting(false)
+    setSelected(new Set())
+  }
+
+  const togglePath = (path: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const doBatchDelete = async (): Promise<void> => {
+    const targets = [...selected]
+    let failed = 0
+    for (const path of targets) {
+      try {
+        await window.xt.trashPath(path)
+      } catch {
+        failed += 1
+      }
+    }
+    setBatchDeleteOpen(false)
+    exitSelection()
+    load()
+    if (failed === 0) notify(`已删除 ${targets.length} 项`)
+    else notify(`${targets.length - failed} 项已删除，${failed} 项删除失败`, 'error')
+  }
+
   const doRename = async (): Promise<void> => {
     if (!renameTarget) return
     const base = renameDraft.trim()
@@ -209,25 +262,67 @@ export default function FileManager({
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2.5, pt: 2, pb: 1 }}>
-        <Typography sx={{ flex: 1, fontSize: 18, fontWeight: 600, color: 'text.primary' }}>
-          文件管理
-        </Typography>
-        {entries.length > 0 && (
-          <TextField
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索"
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchRounded sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  </InputAdornment>
-                )
-              }
-            }}
-            sx={{ width: 220 }}
-          />
+        {selecting ? (
+          <>
+            <Typography sx={{ flex: 1, fontSize: 18, fontWeight: 600, color: 'text.primary' }}>
+              已选 {selected.size}
+            </Typography>
+            <Tooltip title="全选">
+              <IconButton
+                size="small"
+                onClick={() => setSelected(new Set(visibleEntries.map((entry) => entry.path)))}
+              >
+                <DoneAllRounded fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="删除">
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={selected.size === 0}
+                  onClick={() => setBatchDeleteOpen(true)}
+                  sx={{ color: 'error.main' }}
+                >
+                  <DeleteRounded fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="退出多选">
+              <IconButton size="small" onClick={exitSelection}>
+                <CloseRounded fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </>
+        ) : (
+          <>
+            <Typography sx={{ flex: 1, fontSize: 18, fontWeight: 600, color: 'text.primary' }}>
+              接收文件管理
+            </Typography>
+            {entries.length > 0 && (
+              <TextField
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索"
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchRounded sx={{ fontSize: 18, color: 'text.secondary' }} />
+                      </InputAdornment>
+                    )
+                  }
+                }}
+                sx={{ width: 220 }}
+              />
+            )}
+            {entries.length > 0 && (
+              <Tooltip title="多选">
+                <IconButton size="small" onClick={() => setSelecting(true)}>
+                  <ChecklistRounded fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </>
         )}
       </Box>
       {entries.length > 0 && (
@@ -302,9 +397,10 @@ export default function FileManager({
                 <ButtonBase
                   key={entry.path}
                   disableRipple
-                  onClick={() => onOpen(entry)}
+                  onClick={() => (selecting ? togglePath(entry.path) : onOpen(entry))}
                   onContextMenu={(event) => {
                     event.preventDefault()
+                    if (selecting) return
                     setMenu({ x: event.clientX, y: event.clientY, entry })
                   }}
                   sx={{
@@ -314,10 +410,24 @@ export default function FileManager({
                     py: 0.9,
                     borderRadius: 3,
                     textAlign: 'left',
+                    bgcolor:
+                      selecting && selected.has(entry.path) ? 'action.selected' : undefined,
                     '&:hover': { bgcolor: 'action.hover' },
                     '&:active': { bgcolor: 'action.selected' }
                   }}
                 >
+                  {selecting && (
+                    <Checkbox
+                      size="small"
+                      checked={selected.has(entry.path)}
+                      tabIndex={-1}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        togglePath(entry.path)
+                      }}
+                      sx={{ p: 0.5, ml: -0.25, mr: 0.5 }}
+                    />
+                  )}
                   <FileThumb entry={entry} />
                   <Box sx={{ minWidth: 0, flex: 1, ml: 1.25 }}>
                     <Typography noWrap sx={{ fontSize: 13.5, fontWeight: 500 }}>
@@ -459,6 +569,24 @@ export default function FileManager({
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setDeleteTarget(null)}>取消</Button>
           <Button color="error" variant="contained" onClick={() => void doDelete()}>
+            删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={batchDeleteOpen}
+        onClose={() => setBatchDeleteOpen(false)}
+        slotProps={{ paper: { sx: { width: 420, borderRadius: '16px' } } }}
+      >
+        <DialogTitle sx={{ fontSize: 17 }}>删除</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ fontSize: 13.5 }}>
+            删除已选的 {selected.size} 项？
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setBatchDeleteOpen(false)}>取消</Button>
+          <Button color="error" variant="contained" onClick={() => void doBatchDelete()}>
             删除
           </Button>
         </DialogActions>

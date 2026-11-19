@@ -696,6 +696,7 @@ fun AppRoot(
                                         modifier = Modifier
                                             .width(72.dp)
                                             .clip(RoundedCornerShape(16.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                                             .clickable(enabled = sendingTo == null) {
                                                 sendingTo = peer.id
                                                 scope.launch {
@@ -713,7 +714,7 @@ fun AppRoot(
                                                     }
                                                 }
                                             }
-                                            .padding(vertical = 6.dp)
+                                            .padding(horizontal = 4.dp, vertical = 8.dp)
                                     ) {
                                         Box {
                                             AvatarIcon(

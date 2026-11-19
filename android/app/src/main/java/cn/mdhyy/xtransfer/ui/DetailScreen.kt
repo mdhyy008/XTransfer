@@ -163,6 +163,8 @@ import kotlin.math.roundToInt
 
 private const val TIME_GAP_SECONDS = 5 * 60L
 
+private val SEND_ACTIVE_STATUSES = setOf("queued", "sending", "active", "accepted")
+
 private val BUCKET_TYPE_ORDER =
     listOf("图片", "视频", "音频", "文档", "PDF", "压缩包", "安装包", "文件", "文件夹")
 
@@ -354,6 +356,23 @@ fun DetailScreen(
             listState.scrollToItem(0)
         }
         shownCount = messages.size
+    }
+    // 一批发送中的文件全部结束（成功或失败）的那一刻贴到最底部，批次中途不打断用户。
+    val activeSends = remember(messages) {
+        messages.count {
+            it.direction == "out" && it.kind != "text" && it.status in SEND_ACTIVE_STATUSES
+        }
+    }
+    var prevActiveSends by remember(convId) { mutableIntStateOf(activeSends) }
+    LaunchedEffect(convId, activeSends) {
+        val batchFinished = prevActiveSends > 0 && activeSends == 0
+        prevActiveSends = activeSends
+        if (batchFinished) {
+            listState.scrollToItem(0)
+            // 完成/失败态会把卡片高度换掉，等布局落定再补一次。
+            delay(80)
+            listState.scrollToItem(0)
+        }
     }
 
     val submit: () -> Unit = {
