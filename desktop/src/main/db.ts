@@ -269,7 +269,7 @@ export class Db {
   failUnfinishedOutbound(): number {
     const res = this.db
       .prepare(
-        `UPDATE messages SET status = 'failed', error_code = COALESCE(error_code, 'INTERRUPTED'),
+        `UPDATE messages SET status = 'failed', error_code = COALESCE(error_code, '传输中断了，可以重试'),
            updated_at = ? WHERE direction = 'out' AND status IN ('queued', 'sending', 'accepted', 'active')`
       )
       .run(now())

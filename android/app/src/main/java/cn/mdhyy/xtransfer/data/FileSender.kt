@@ -22,6 +22,9 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -195,11 +198,29 @@ class FileSender(
                 db.messageDao().setStatus(job.messageId, "canceled", null, nowSec())
             } else {
                 repo.markBucketFailed(job.uri.toString(), true)
-                val code = if (error is SendError) error.code else "ERROR"
-                db.messageDao().setStatus(job.messageId, "failed", code, nowSec())
+                db.messageDao().setStatus(job.messageId, "failed", describeSendError(error), nowSec())
             }
         } finally {
             jobs.remove(job.messageId)
+        }
+    }
+
+    // 弹窗里要同时看到发生了什么和为什么，所以把原始信息一起存进去。
+    private fun describeSendError(error: Exception): String {
+        val detail = error.message?.takeIf { it.isNotBlank() }
+            ?: error.javaClass.simpleName
+        return when (error) {
+            is SendError -> detail
+            is SocketTimeoutException ->
+                "网络超时，对方没有及时响应，请确认对方在线后重试（$detail）"
+            is ConnectException ->
+                "连不上对方，对方可能已经离线或不在同一网络（$detail）"
+            is UnknownHostException ->
+                "找不到对方地址，对方可能换了网络，请重新搜索设备（$detail）"
+            is IOException ->
+                "传输中途网络断开，文件没有发送完成，可以重试（$detail）"
+            else ->
+                "发送失败，遇到了未预期的问题（${error.javaClass.simpleName}：$detail）"
         }
     }
 

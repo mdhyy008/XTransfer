@@ -160,7 +160,7 @@ interface MessageDao {
     suspend fun setStatus(id: String, status: String, error: String?, now: Long)
 
     @Query(
-        """UPDATE messages SET status = 'failed', errorCode = COALESCE(errorCode, 'INTERRUPTED'),
+        """UPDATE messages SET status = 'failed', errorCode = COALESCE(errorCode, '传输中断了，可以重试'),
              updatedAt = :now WHERE direction = 'out' AND status IN ('queued', 'sending', 'accepted', 'active')"""
     )
     suspend fun failUnfinishedOutbound(now: Long)
