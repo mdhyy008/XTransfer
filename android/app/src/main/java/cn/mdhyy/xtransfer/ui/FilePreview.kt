@@ -161,6 +161,47 @@ fun openFileExternally(context: Context, path: String, name: String?, folder: Bo
         .onFailure { context.showError("没有可打开该文件的应用") }
 }
 
+fun shareFileExternally(context: Context, path: String, name: String?) {
+    val label = name ?: File(path).name
+    val uri = uriFor(context, path)
+    if (uri == null) {
+        context.showError("文件不存在")
+        return
+    }
+    val mime = if (label.isEmpty() || File(label).extension.isEmpty()) "*/*" else mimeOfFile(label)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(Intent.createChooser(intent, "分享文件")) }
+        .onFailure { context.showError("没有可用的分享应用") }
+}
+
+fun shareFilesExternally(context: Context, paths: List<String>) {
+    val uris = paths.mapNotNull { uriFor(context, it) }
+    if (uris.isEmpty()) {
+        context.showError("文件不存在")
+        return
+    }
+    val mimes = paths.map { mimeOfFile(File(it).name) }.distinct()
+    val type = mimes.singleOrNull() ?: "*/*"
+    val intent = if (uris.size == 1) {
+        Intent(Intent.ACTION_SEND).apply {
+            this.type = type
+            putExtra(Intent.EXTRA_STREAM, uris.first())
+        }
+    } else {
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            this.type = type
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+    }
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { context.startActivity(Intent.createChooser(intent, "分享文件")) }
+        .onFailure { context.showError("没有可用的分享应用") }
+}
+
 private fun sampleSize(width: Int, height: Int, maxSize: Int): Int {
     var sample = 1
     while (width / sample > maxSize || height / sample > maxSize) {

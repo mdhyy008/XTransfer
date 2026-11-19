@@ -54,6 +54,7 @@ function Shell() {
   const [scanning, setScanning] = useState(false)
   const [bucket, setBucket] = useState<FileEntry[]>([])
   const [page, setPage] = useState<AppPage>('chat')
+  const [autoStartShare, setAutoStartShare] = useState(false)
   const [openingFile, setOpeningFile] = useState(false)
   const openToken = useRef(0)
   const [bucketOpen, setBucketOpen] = useState(false)
@@ -231,8 +232,10 @@ function Shell() {
     const offUiAction = window.xt.onUiAction((action) => {
       if (action === 'bucket') setBucketOpen(true)
       else if (action === 'files') setPage('files')
-      else if (action === 'share') setPage('lan')
-      else if (action === 'settings') setSettingsOpen(true)
+      else if (action === 'share') {
+        setPage('lan')
+        setAutoStartShare(false)
+      } else if (action === 'settings') setSettingsOpen(true)
     })
     return () => {
       alive = false
@@ -821,6 +824,7 @@ function Shell() {
                 )
             }}
             trusted={conv.id === PUBLIC_CONVERSATION_ID ? undefined : peer?.trusted}
+            autoAcceptAll={snapshot?.settings.autoAcceptAll ?? false}
             onSetTrust={(trusted) => {
               window.xt
                 .setTrust(conv.id, trusted)
@@ -901,6 +905,8 @@ function Shell() {
         ) : (
           <SharePage
             bucket={bucket}
+            autoStart={autoStartShare}
+            onAutoStarted={() => setAutoStartShare(false)}
             onAddFiles={() => void handlePickFiles()}
             onAddImages={() => void handlePickImages()}
             onAddApks={() => void handlePickApks()}
@@ -933,6 +939,12 @@ function Shell() {
         preservedPaths={bucket.map((entry) => entry.path)}
         accent={accent}
         onClose={() => setSettingsOpen(false)}
+        onSharePackage={(entry) => {
+          addEntries([entry])
+          setPage('lan')
+          setAutoStartShare(true)
+          setSettingsOpen(false)
+        }}
         notify={notify}
       />
       <BluetoothDialog

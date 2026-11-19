@@ -29,6 +29,7 @@ export class AppState {
     closeToTray: true,
     quickPreview: true,
     enterToSend: true,
+    autoAcceptAll: false,
     misans: true,
     bleEnabled: false,
     webChat: false,
@@ -55,7 +56,8 @@ export class AppState {
     address: '',
     deviceId: '',
     rooms: [],
-    members: {}
+    members: {},
+    bans: {}
   }
   peers = new Map<string, Peer>()
   private lastPresence = new Map<string, Presence>()

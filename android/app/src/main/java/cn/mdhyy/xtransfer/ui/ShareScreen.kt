@@ -73,7 +73,9 @@ fun ShareScreen(
     onAddFolder: () -> Unit,
     onAddImages: () -> Unit,
     onAddApks: () -> Unit,
-    onRemove: (String) -> Unit
+    onRemove: (String) -> Unit,
+    autoStart: Boolean = false,
+    onAutoStarted: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -102,6 +104,13 @@ fun ShareScreen(
         if (busy) return
         share.stop()
         context.toast("已停止分发")
+    }
+
+    // 从预览、聊天、分享软件页带着文件进来时，到页即自动开始分发。
+    LaunchedEffect(autoStart, items.size) {
+        if (!autoStart || items.isEmpty() || running || busy) return@LaunchedEffect
+        start()
+        onAutoStarted()
     }
 
     val localFiles = items.filter { it.kind != "folder" }

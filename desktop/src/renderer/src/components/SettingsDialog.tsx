@@ -47,13 +47,16 @@ import LinkRounded from '@mui/icons-material/LinkRounded'
 import PersonRounded from '@mui/icons-material/PersonRounded'
 import PublicRounded from '@mui/icons-material/PublicRounded'
 import VisibilityRounded from '@mui/icons-material/VisibilityRounded'
-import type { DoctorResult, Snapshot, ThemeMode } from '../../../shared/types'
+import DownloadRounded from '@mui/icons-material/DownloadRounded'
+import ShareRounded from '@mui/icons-material/ShareRounded'
+import type { DoctorResult, FileEntry, Snapshot, ThemeMode } from '../../../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../../../shared/types'
 import { seedName } from '../theme'
 import { describeError, formatSize } from '../model'
 import logo from '../assets/logo.png'
 import zsm from '../assets/zsm.png'
 import PlatformIcon from './PlatformIcon'
+import ShareAppDialog from './ShareAppDialog'
 import ThemeDialog from './ThemeDialog'
 import { useRetained } from './useRetained'
 
@@ -78,6 +81,7 @@ type Props = {
   preservedPaths: string[]
   accent: string
   onClose: () => void
+  onSharePackage: (entry: FileEntry) => void
   notify: (text: string, severity?: 'success' | 'error' | 'warning' | 'info') => void
 }
 
@@ -261,6 +265,7 @@ export default function SettingsDialog({
   preservedPaths,
   accent,
   onClose,
+  onSharePackage,
   notify
 }: Props) {
   const [name, setName] = useState('')
@@ -275,6 +280,8 @@ export default function SettingsDialog({
   const [clearChatsOpen, setClearChatsOpen] = useState(false)
   const [clearOfflineOpen, setClearOfflineOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [shareAppOpen, setShareAppOpen] = useState(false)
+  const [cacheConfirmOpen, setCacheConfirmOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedbackQr, setFeedbackQr] = useState('')
@@ -375,6 +382,20 @@ export default function SettingsDialog({
     } finally {
       setBusy('')
     }
+  }
+
+  const doCleanCache = async (): Promise<void> => {
+    setCacheConfirmOpen(false)
+    await run('cache', async () => {
+      const res = await window.xt.cleanCache(preservedPaths)
+      const text = `已清理 ${res.parts} 个分片，释放 ${formatSize(res.freedBytes) || '0 B'}`
+      setMessage(text)
+      notify(text)
+      window.xt
+        .cacheSize()
+        .then((next) => setCacheBytes(next.total))
+        .catch(() => {})
+    })
   }
 
   const patch = (value: Partial<NonNullable<typeof settings>>): void => {
@@ -637,6 +658,17 @@ export default function SettingsDialog({
               />
             }
           />
+          <GroupDivider />
+          <Row
+            icon={<DownloadRounded fontSize="small" />}
+            title="自动接收所有文件"
+            trailing={
+              <ToggleSwitch
+                checked={settings?.autoAcceptAll ?? false}
+                onChange={(checked) => patch({ autoAcceptAll: checked })}
+              />
+            }
+          />
         </Section>
 
         <Section title="数据">
@@ -708,18 +740,7 @@ export default function SettingsDialog({
                 size="small"
                 variant="outlined"
                 disabled={busy !== ''}
-                onClick={() =>
-                  void run('cache', async () => {
-                    const res = await window.xt.cleanCache(preservedPaths)
-                    const text = `已清理 ${res.parts} 个分片，释放 ${formatSize(res.freedBytes) || '0 B'}`
-                    setMessage(text)
-                    notify(text)
-                    window.xt
-                      .cacheSize()
-                      .then((next) => setCacheBytes(next.total))
-                      .catch(() => {})
-                  })
-                }
+                onClick={() => setCacheConfirmOpen(true)}
               >
                 清理
               </Button>
@@ -1152,6 +1173,31 @@ export default function SettingsDialog({
               mdhyy.cn/tools/page/x-transfer
             </Typography>
           </Box>
+          <Divider />
+          <Box
+            onClick={() => {
+              setAboutOpen(false)
+              setShareAppOpen(true)
+            }}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+              py: 1,
+              mt: 0.5,
+              mx: -1,
+              px: 1,
+              borderRadius: '8px',
+              cursor: 'pointer',
+              '&:hover': { bgcolor: 'action.hover' }
+            }}
+          >
+            <ShareRounded fontSize="small" sx={{ color: 'text.secondary' }} />
+            <Typography variant="body2" sx={{ flex: 1 }}>
+              分享本软件
+            </Typography>
+            <ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />
+          </Box>
           <Typography
             variant="caption"
             color="primary"
@@ -1194,6 +1240,37 @@ export default function SettingsDialog({
           <Button onClick={() => setAboutOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog open={cacheConfirmOpen} onClose={() => setCacheConfirmOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>清理缓存</DialogTitle>
+        <DialogContent sx={{ minWidth: 380 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            将清除
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            临时文件与传输临时片、缩略图缓存、中继缓存，以及服务器上 30 天前的传输记录。
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 600, mt: 1.5, mb: 0.5 }}>
+            会保留
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            暂存桶里的文件、已收到的文件。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCacheConfirmOpen(false)}>取消</Button>
+          <Button variant="contained" disabled={busy !== ''} onClick={() => void doCleanCache()}>
+            清理
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <ShareAppDialog
+        open={shareAppOpen}
+        onClose={() => setShareAppOpen(false)}
+        onSharePackage={onSharePackage}
+        notify={notify}
+      />
 
       <Dialog open={doctor !== null} onClose={() => setDoctor(null)}>
         <DialogTitle sx={{ fontSize: 18 }}>自检</DialogTitle>

@@ -21,8 +21,8 @@ android {
         applicationId = "cn.mdhyy.xtransfer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 39
-        versionName = "0.3.8Beta"
+        versionCode = 47
+        versionName = "0.4.5Beta"
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -89,5 +89,6 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
     implementation(libs.zxing.core)
+    implementation(libs.zxing.embedded)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

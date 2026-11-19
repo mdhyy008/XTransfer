@@ -589,6 +589,22 @@ fun SettingsScreen(
                             )
                         }
                     )
+                    SettingDivider()
+                    SettingRow(
+                        icon = Icons.Rounded.Download,
+                        title = "自动接收所有文件",
+                        singleRow = true,
+                        trailing = {
+                            SettingSwitch(
+                                checked = settings.autoAcceptAll,
+                                onCheckedChange = {
+                                    store.update(autoAcceptAll = it)
+                                    XlanService.restart(context)
+                                    notify("正在重启服务")
+                                }
+                            )
+                        }
+                    )
                 }
             }
 
@@ -912,13 +928,33 @@ fun SettingsScreen(
             ConfirmAction.OFFLINE -> "清理离线设备"
         }
         val body = when (pending) {
-            ConfirmAction.CACHE -> "将清除已接收的临时文件。"
+            ConfirmAction.CACHE -> ""
             ConfirmAction.OFFLINE -> "将删除所有离线设备的会话和聊天记录。"
         }
         AlertDialog(
             onDismissRequest = { confirm = null },
             title = { Text(title) },
-            text = { Text(body) },
+            text = {
+                if (pending == ConfirmAction.CACHE) {
+                    Column {
+                        Text("将清除", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "临时文件与传输临时片、缩略图缓存、中继缓存，以及服务器上 30 天前的传输记录。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text("会保留", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "暂存桶里的文件、已收到的文件。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Text(body)
+                }
+            },
             confirmButton = {
                 TextButton(
                     enabled = !cleaning,

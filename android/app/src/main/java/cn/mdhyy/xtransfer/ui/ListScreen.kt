@@ -1,10 +1,13 @@
 package cn.mdhyy.xtransfer.ui
 
 import android.bluetooth.BluetoothAdapter
+import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.StartOffset
@@ -18,6 +21,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -47,6 +53,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Campaign
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Devices
@@ -64,6 +71,7 @@ import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -108,6 +116,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import cn.mdhyy.xtransfer.data.ConversationUi
 import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.Peer
@@ -123,9 +133,10 @@ import cn.mdhyy.xtransfer.data.RELAY_CONVERSATION_PREFIX
 import cn.mdhyy.xtransfer.data.RELAY_PUBLIC_ROOM_ID
 import cn.mdhyy.xtransfer.data.RelayManager
 import cn.mdhyy.xtransfer.data.Repository
-import cn.mdhyy.xtransfer.data.WifiDirectDevice
-import cn.mdhyy.xtransfer.data.WifiDirectManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -171,20 +182,16 @@ fun ListScreen(
     onOpenSettings: () -> Unit,
     onOpenBucket: () -> Unit,
     hotspot: LocalHotspot,
-    wifiDirect: WifiDirectManager,
     ble: BleManager,
     relay: RelayManager,
-    onOpenHotspot: () -> Unit,
-    onOpenWifiDirect: () -> Unit
+    onOpenHotspot: () -> Unit
 ) {
-    val direct by wifiDirect.state.collectAsStateWithLifecycle()
     val bleState by ble.state.collectAsStateWithLifecycle()
     val relayState by relay.state.collectAsStateWithLifecycle()
     val hotspotState by hotspot.state.collectAsStateWithLifecycle()
     val hotspotSupported = hotspot.supported
     val activeLinks = buildList {
         if (hotspotState is HotspotState.Running) add(Icons.Rounded.WifiTethering)
-        if (direct.connected) add(Icons.Rounded.Devices)
         if (bleState.on) add(Icons.Rounded.Bluetooth)
     }
     // 热点网卡不在 ConnectivityManager 的列表里，单独取一次地址做展示。
@@ -195,8 +202,8 @@ fun ListScreen(
     var helpOpen by remember { mutableStateOf(false) }
     // 用过任意一种连接方式后本会话不再提示，重启应用后重新出现。
     var solutionUsed by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(hotspotState, direct.connected, bleState.on) {
-        if (hotspotState is HotspotState.Running || direct.connected || bleState.on) {
+    LaunchedEffect(hotspotState, bleState.on) {
+        if (hotspotState is HotspotState.Running || bleState.on) {
             solutionUsed = true
         }
     }
@@ -215,6 +222,27 @@ fun ListScreen(
     var roomCode by remember { mutableStateOf("") }
     var roomBusy by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    // 公网分组上次是显示的：启动或回到前台先按记忆放出来，3 秒内连上就保持，连不上再收起。
+    val relayPrefs = remember { context.getSharedPreferences("xt_ui", Context.MODE_PRIVATE) }
+    var relayGroupRemembered by remember {
+        mutableStateOf(relayPrefs.getBoolean("relay_group_shown", false))
+    }
+    var relayGraceOver by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            relayGraceOver = false
+            delay(3_000)
+            relayGraceOver = true
+        }
+    }
+    LaunchedEffect(relayState.connected) {
+        // 只记「用过公网」，断线时不清掉：下次启动还要靠它先撑过 3 秒宽限。
+        if (relayState.connected && !relayGroupRemembered) {
+            relayGroupRemembered = true
+            relayPrefs.edit().putBoolean("relay_group_shown", true).apply()
+        }
+    }
     val bleEnable = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { }
@@ -250,11 +278,6 @@ fun ListScreen(
         flashOpen = true
         delay(2000)
         flashOpen = false
-    }
-
-    // 组网成功后 xlan 要在 P2P 网段上重新发现对端。
-    LaunchedEffect(direct.connected) {
-        if (direct.connected) runCatching { repo.scan() }
     }
 
     fun showInfo(conv: ConversationUi) {
@@ -356,7 +379,8 @@ fun ListScreen(
     }
     // 只在真正发起连接时提示；等待重连的间隙不挂在这里。
     val relayBusy = relayState.connecting && relayState.error.isNullOrEmpty()
-    val relayShown = relayState.connected || relayBusy
+    val relayShown = relayState.connected || relayBusy ||
+        (relayState.configured && relayGroupRemembered && !relayGraceOver)
 
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
@@ -386,8 +410,7 @@ fun ListScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (activeLinks.isNotEmpty() ||
-                        (lanInfo == null &&
-                            (hotspotSupported || wifiDirect.supported || ble.supported))
+                        (lanInfo == null && (hotspotSupported || ble.supported))
                     ) {
                         Spacer(Modifier.width(8.dp))
                         Box(
@@ -523,7 +546,6 @@ fun ListScreen(
                     ?: pinnedBleDeviceRows.lastOrNull()?.first
                     ?: pinnedDevices.lastOrNull()
                 )?.id
-            val lastDirectAddr = direct.devices.lastOrNull()?.address
             val lastBleConvId = (
                 normalBlePending.lastOrNull()
                     ?: normalBleDeviceRows.lastOrNull()?.first
@@ -632,23 +654,6 @@ fun ListScreen(
                     divider = conv.id != lastPinnedConvId
                 )
             }
-            }
-            if (direct.devices.isNotEmpty() || direct.connected) {
-                item(key = "direct-label") {
-                    SectionLabel(
-                        text = "Wi-Fi Direct 设备",
-                    )
-                    Spacer(Modifier.height(1.dp))
-                }
-                items(direct.devices, key = { "direct-${it.address}" }) { device ->
-                    WifiDirectRow(
-                        device = device,
-                        connecting = direct.connectingAddress == device.address,
-                        connected = direct.connected && direct.peerAddress == device.address,
-                        onClick = { wifiDirect.connect(device.address) },
-                        divider = device.address != lastDirectAddr
-                    )
-                }
             }
             if (normalBleDeviceRows.isNotEmpty() || normalBlePending.isNotEmpty()) {
                 item(key = "ble-label") {
@@ -851,7 +856,6 @@ fun ListScreen(
                 }
             }
             if (online.isEmpty() && offline.isEmpty() && pinnedDevices.isEmpty() &&
-                direct.devices.isEmpty() && !direct.connected &&
                 normalBleDeviceRows.isEmpty() && normalBlePending.isEmpty() &&
                 pinnedBleDeviceRows.isEmpty() && pinnedBlePending.isEmpty() &&
                 !relayShown
@@ -1006,77 +1010,38 @@ fun ListScreen(
     }
 
     if (roomOpen) {
-        AlertDialog(
-            onDismissRequest = { if (!roomBusy) roomOpen = false },
-            title = { Text("创建或加入房间") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = roomName,
-                            onValueChange = { if (it.length <= 20) roomName = it },
-                            label = { Text("房间名称") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilledTonalButton(
-                            enabled = !roomBusy && roomName.isNotBlank(),
-                            onClick = {
-                                roomBusy = true
-                                scope.launch {
-                                    runCatching { repo.createRelayRoom(roomName) }
-                                        .onSuccess { id ->
-                                            roomOpen = false
-                                            roomName = ""
-                                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
-                                        }
-                                        .onFailure { context.showError(it.message ?: "创建失败") }
-                                    roomBusy = false
-                                }
-                            }
-                        ) { Text("创建") }
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = roomCode,
-                            onValueChange = { input ->
-                                roomCode = input.filter { it.isDigit() }.take(6)
-                            },
-                            label = { Text("房间号") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilledTonalButton(
-                            enabled = !roomBusy && roomCode.length == 6,
-                            onClick = {
-                                roomBusy = true
-                                scope.launch {
-                                    runCatching { repo.joinRelayRoom(roomCode) }
-                                        .onSuccess { id ->
-                                            roomOpen = false
-                                            roomCode = ""
-                                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
-                                        }
-                                        .onFailure { context.showError(it.message ?: "加入失败") }
-                                    roomBusy = false
-                                }
-                            }
-                        ) { Text("加入") }
-                    }
+        RoomDialog(
+            name = roomName,
+            onName = { if (it.length <= 20) roomName = it },
+            code = roomCode,
+            onCode = { input -> roomCode = input.filter { it.isDigit() }.take(6) },
+            busy = roomBusy,
+            onClose = { if (!roomBusy) roomOpen = false },
+            onCreate = {
+                roomBusy = true
+                scope.launch {
+                    runCatching { repo.createRelayRoom(roomName) }
+                        .onSuccess { id ->
+                            roomOpen = false
+                            roomName = ""
+                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
+                        }
+                        .onFailure { context.showError(it.message ?: "创建失败") }
+                    roomBusy = false
                 }
             },
-            confirmButton = {
-                TextButton(
-                    enabled = !roomBusy,
-                    onClick = { roomOpen = false }
-                ) { Text("关闭") }
+            onJoin = {
+                roomBusy = true
+                scope.launch {
+                    runCatching { repo.joinRelayRoom(roomCode) }
+                        .onSuccess { id ->
+                            roomOpen = false
+                            roomCode = ""
+                            onOpenConv(RELAY_CONVERSATION_PREFIX + id)
+                        }
+                        .onFailure { context.showError(it.message ?: "加入失败") }
+                    roomBusy = false
+                }
             }
         )
     }
@@ -1103,15 +1068,6 @@ fun ListScreen(
                     )
                     MenuDivider()
                 }
-                ConvMenuItem(
-                    icon = Icons.Rounded.Devices,
-                    label = "Wi-Fi Direct",
-                    onClick = {
-                        connectionsOpen = false
-                        onOpenWifiDirect()
-                    }
-                )
-                MenuDivider()
                 ConvMenuItem(
                     icon = Icons.Rounded.Bluetooth,
                     label = "蓝牙广播",
@@ -1152,11 +1108,6 @@ fun ListScreen(
                         usage = "用法：打开热点，另一台设备扫码或输入密码连上后，两台设备组成一个临时局域网，可以互传文件、打开网页聊天。"
                     )
                 }
-                HelpRow(
-                    icon = Icons.Rounded.Devices,
-                    label = "Wi-Fi Direct",
-                    usage = "用法：两台设备都打开 Wi-Fi Direct 并连接，连上后两台设备直接组成点对点网络，可以互传文件。"
-                )
                 HelpRow(
                     icon = Icons.Rounded.Bluetooth,
                     label = "蓝牙广播",
@@ -1215,60 +1166,6 @@ private fun HelpRow(icon: ImageVector, label: String, usage: String) {
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
-    }
-}
-
-@Composable
-private fun WifiDirectRow(
-    device: WifiDirectDevice,
-    connecting: Boolean,
-    connected: Boolean,
-    onClick: () -> Unit,
-    divider: Boolean = true
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !connecting && !connected, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AvatarIcon(icon = Icons.Rounded.Devices, online = connected)
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = device.name,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(8.dp))
-        when {
-            connecting -> CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp
-            )
-            connected -> Text(
-                text = "已连接",
-                style = MaterialTheme.typography.labelMedium,
-                color = LocalXtColors.current.success
-            )
-            else -> Text(
-                text = "连接",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-    }
-    if (divider) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 72.dp)
-                .height(1.dp)
-                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-        )
     }
 }
 
@@ -1719,5 +1616,153 @@ private fun EmptyDevices() {
             style = MaterialTheme.typography.titleMedium,
             color = colors.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun RoomDialog(
+    name: String,
+    onName: (String) -> Unit,
+    code: String,
+    onCode: (String) -> Unit,
+    busy: Boolean,
+    onClose: () -> Unit,
+    onCreate: () -> Unit,
+    onJoin: () -> Unit
+) {
+    var tab by remember { mutableIntStateOf(0) }
+    val colors = MaterialTheme.colorScheme
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = colors.surfaceContainerLow,
+            shadowElevation = 16.dp
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "公网房间",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colors.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onClose, enabled = !busy) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(50))
+                        .background(colors.surfaceContainerHigh)
+                        .padding(4.dp)
+                ) {
+                    listOf("加入", "创建").forEachIndexed { index, label ->
+                        val active = tab == index
+                        val background by animateColorAsState(
+                            targetValue = if (active) colors.primary else Color.Transparent,
+                            animationSpec = tween(200),
+                            label = "tabBackground"
+                        )
+                        val foreground by animateColorAsState(
+                            targetValue = if (active) colors.onPrimary else colors.onSurfaceVariant,
+                            animationSpec = tween(200),
+                            label = "tabForeground"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(50))
+                                .background(background)
+                                .clickable(enabled = !busy) { tab = index }
+                                .padding(vertical = 9.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = foreground
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                AnimatedContent(
+                    targetState = tab,
+                    transitionSpec = {
+                        (fadeIn(tween(180)) + slideInVertically { it / 8 }) togetherWith
+                            (fadeOut(tween(120)) + slideOutVertically { -it / 8 })
+                    },
+                    label = "roomTab"
+                ) { current ->
+                    Column {
+                        if (current == 0) {
+                            OutlinedTextField(
+                                value = code,
+                                onValueChange = onCode,
+                                label = { Text("房间号") },
+                                placeholder = { Text("6位数房间码") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(20.dp))
+                            Button(
+                                onClick = onJoin,
+                                enabled = !busy && code.length == 6,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                            ) {
+                                if (busy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = colors.onPrimary
+                                    )
+                                } else {
+                                    Text("加入")
+                                }
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = onName,
+                                label = { Text("房间名称") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(20.dp))
+                            Button(
+                                onClick = onCreate,
+                                enabled = !busy && name.isNotBlank(),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                            ) {
+                                if (busy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = colors.onPrimary
+                                    )
+                                } else {
+                                    Text("创建")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

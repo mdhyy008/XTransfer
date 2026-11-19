@@ -149,7 +149,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         XlanApp.foreground = true
-        (application as XlanApp).wifiDirect.startIfEnabled()
         (application as XlanApp).ble.startIfEnabled()
         (application as XlanApp).webChat.startIfEnabled()
         FilesWidgetProvider.refresh(this)
@@ -159,7 +158,6 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         XlanApp.foreground = false
-        (application as XlanApp).wifiDirect.stop()
         (application as XlanApp).ble.pauseScanning()
     }
 

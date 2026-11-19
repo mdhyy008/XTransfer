@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -68,6 +69,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.navigation.NavType
@@ -137,6 +139,8 @@ fun AppRoot(
     var offlineDismissed by remember { mutableStateOf(false) }
 
     var bucketOpen by remember { mutableStateOf(false) }
+    var autoStartShare by remember { mutableStateOf(false) }
+    var pendingSharePage by remember { mutableStateOf(false) }
     // 预览页同一时间只留一个，连点文件时不会叠出好几层。
     var lastMediaNavAt by remember { mutableLongStateOf(0L) }
     val xlanApp = context.applicationContext as XlanApp
@@ -318,6 +322,15 @@ fun AppRoot(
         }
     ) {
         composable("list") {
+            LaunchedEffect(pendingSharePage) {
+                if (pendingSharePage) {
+                    homePager.animateScrollToPage(
+                        2,
+                        animationSpec = tween(320, easing = FastOutSlowInEasing)
+                    )
+                    pendingSharePage = false
+                }
+            }
             Column(modifier = Modifier.fillMaxSize()) {
                 HorizontalPager(
                     state = homePager,
@@ -344,11 +357,9 @@ fun AppRoot(
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenBucket = { bucketOpen = true },
                             hotspot = xlanApp.hotspot,
-                            wifiDirect = xlanApp.wifiDirect,
                             ble = xlanApp.ble,
                             relay = xlanApp.relay,
-                            onOpenHotspot = { nav.navigate("hotspot") },
-                            onOpenWifiDirect = { nav.navigate("wifidirect") }
+                            onOpenHotspot = { nav.navigate("hotspot") }
                         )
                     } else if (index == 1) {
                         FileManagerScreen(
@@ -367,7 +378,9 @@ fun AppRoot(
                             onAddFolder = { pickBucketFolder() },
                             onAddImages = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onAddApks = { nav.navigate("apps") { launchSingleTop = true } },
-                            onRemove = { repo.removeBucket(it) }
+                            onRemove = { repo.removeBucket(it) },
+                            autoStart = autoStartShare,
+                            onAutoStarted = { autoStartShare = false }
                         )
                     }
                 }
@@ -412,6 +425,7 @@ fun AppRoot(
                 publicNotify = settings.publicNotifications,
                 quickPreview = settings.quickPreview,
                 enterToSend = settings.enterToSend,
+                autoAcceptAll = settings.autoAcceptAll,
                 bucketItems = bucket,
                 offline = offlineActive,
                 lanOnline = lan.info != null,
@@ -447,7 +461,12 @@ fun AppRoot(
                         nav.navigate("media/${Uri.encode(message.id)}")
                     }
                 },
-                onOpenApps = { nav.navigate("apps/${Uri.encode(id)}") }
+                onOpenApps = { nav.navigate("apps/${Uri.encode(id)}") },
+                onShareFile = { message ->
+                    val path = message.localPath
+                    if (path.isNullOrBlank()) context.showError("文件不存在")
+                    else shareFileExternally(context, path, message.fileName)
+                }
             )
         }
         composable("apps") {
@@ -475,9 +494,15 @@ fun AppRoot(
         ) { entry ->
             val raw = entry.arguments?.getString("id").orEmpty()
             val id = runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+            val message = messages.firstOrNull { it.id == id }
             MediaScreen(
-                message = messages.firstOrNull { it.id == id },
-                onBack = { nav.popBackStack() }
+                message = message,
+                onBack = { nav.popBackStack() },
+                onShare = {
+                    val path = message?.localPath
+                    if (path.isNullOrBlank()) context.showError("文件不存在")
+                    else shareFileExternally(context, path, message.fileName)
+                }
             )
         }
         composable(
@@ -500,7 +525,8 @@ fun AppRoot(
                     createdAt = 0,
                     updatedAt = 0
                 ),
-                onBack = { nav.popBackStack() }
+                onBack = { nav.popBackStack() },
+                onShare = { shareFileExternally(context, path, path.substringAfterLast('/')) }
             )
         }
         composable("settings") {
@@ -527,18 +553,29 @@ fun AppRoot(
             )
         }
         composable("about") {
-            AboutScreen(onBack = { nav.popBackStack() })
+            AboutScreen(
+                onBack = { nav.popBackStack() },
+                onOpenShare = { nav.navigate("shareapp") }
+            )
+        }
+        composable("shareapp") {
+            ShareAppScreen(
+                onBack = { nav.popBackStack() },
+                onSharePackage = { item ->
+                    repo.addBucket(listOf(item))
+                    autoStartShare = true
+                    pendingSharePage = true
+                    nav.popBackStack("list", inclusive = false)
+                }
+            )
         }
         composable("hotspot") {
             HotspotScreen(onBack = { nav.popBackStack() })
         }
-        composable("wifidirect") {
-            WifiDirectScreen(onBack = { nav.popBackStack() })
-        }
     }
 
     val entry by nav.currentBackStackEntryAsState()
-    // 只有真正显示离线模糊层的页面才需要这层点击收掉；热点、Wi-Fi Direct 等页面没有模糊层，
+    // 只有真正显示离线模糊层的页面才需要这层点击收掉；热点等页面没有模糊层，
     // 留着这层会吞掉进入页面后的第一次点击。
     val route = entry?.destination?.route
     val detailId = entry?.arguments?.getString("id").orEmpty()
@@ -580,6 +617,12 @@ fun AppRoot(
             it.id != selfId && it.addr != null && repo.isPeerOnline(it)
         }
         var sendingTo by remember(notice) { mutableStateOf<String?>(null) }
+        // 刚进应用时设备发现还没回来，先转圈；等一会儿仍没有可发送的设备就把转圈收掉。
+        var probing by remember(notice) { mutableStateOf(true) }
+        LaunchedEffect(notice) {
+            delay(1800)
+            probing = false
+        }
         val store = {
             repo.addBucket(notice.items)
             context.toast("已加入暂存桶")
@@ -622,71 +665,99 @@ fun AppRoot(
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
                     )
-                    if (targets.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.width(240.dp)
+                    Spacer(Modifier.height(16.dp))
+                    if (targets.isEmpty() && probing) {
+                        // 转圈占住和设备列表一样的高度，加载完弹窗不会跳一下。
+                        Box(
+                            modifier = Modifier
+                                .width(240.dp)
+                                .height(76.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            items(targets, key = { it.id }) { peer ->
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier
-                                        .width(72.dp)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable(enabled = sendingTo == null) {
-                                            sendingTo = peer.id
-                                            scope.launch {
-                                                val sent = repo.sendShared(peer.id, notice.items)
-                                                sendingTo = null
-                                                if (sent) {
-                                                    onConsumeShareNotice()
-                                                    nav.navigate("detail/${Uri.encode(peer.id)}") {
-                                                        launchSingleTop = true
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 3.dp
+                            )
+                        }
+                    } else if (targets.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .width(240.dp)
+                                .heightIn(min = 76.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.width(240.dp)
+                            ) {
+                                items(targets, key = { it.id }) { peer ->
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier
+                                            .width(72.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable(enabled = sendingTo == null) {
+                                                sendingTo = peer.id
+                                                scope.launch {
+                                                    val sent = repo.sendShared(peer.id, notice.items)
+                                                    sendingTo = null
+                                                    if (sent) {
+                                                        onConsumeShareNotice()
+                                                        nav.navigate("detail/${Uri.encode(peer.id)}") {
+                                                            launchSingleTop = true
+                                                        }
+                                                    } else {
+                                                        repo.addBucket(notice.items)
+                                                        context.showError("设备不在线")
+                                                        onConsumeShareNotice()
                                                     }
-                                                } else {
-                                                    repo.addBucket(notice.items)
-                                                    context.showError("设备不在线")
-                                                    onConsumeShareNotice()
+                                                }
+                                            }
+                                            .padding(vertical = 6.dp)
+                                    ) {
+                                        Box {
+                                            AvatarIcon(
+                                                icon = platformIcon(peer.platform),
+                                                online = true
+                                            )
+                                            if (sendingTo == peer.id) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .matchParentSize()
+                                                        .clip(CircleShape)
+                                                        .background(
+                                                            MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f)
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(20.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
                                                 }
                                             }
                                         }
-                                        .padding(vertical = 6.dp)
-                                ) {
-                                    Box {
-                                        AvatarIcon(
-                                            icon = platformIcon(peer.platform),
-                                            online = true
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = peer.name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
                                         )
-                                        if (sendingTo == peer.id) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .matchParentSize()
-                                                    .clip(CircleShape)
-                                                    .background(
-                                                        MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f)
-                                                    ),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(20.dp),
-                                                    strokeWidth = 2.dp
-                                                )
-                                            }
-                                        }
                                     }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        text = peer.name,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center
-                                    )
                                 }
                             }
                         }
+                    } else {
+                        Text(
+                            text = "暂无局域网在线设备，关闭弹窗后会存入暂存桶",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.width(220.dp)
+                        )
                     }
                 }
             }

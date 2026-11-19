@@ -13,7 +13,6 @@ import cn.mdhyy.xtransfer.data.RelayManager
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.data.SettingsStore
 import cn.mdhyy.xtransfer.data.WebChatServer
-import cn.mdhyy.xtransfer.data.WifiDirectManager
 
 class XlanApp : Application() {
     lateinit var repo: Repository
@@ -23,9 +22,6 @@ class XlanApp : Application() {
         private set
 
     lateinit var share: LanShareServer
-        private set
-
-    lateinit var wifiDirect: WifiDirectManager
         private set
 
     lateinit var ble: BleManager
@@ -43,10 +39,10 @@ class XlanApp : Application() {
         val db = Room.databaseBuilder(this, AppDatabase::class.java, "xtransfer.db")
             .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
-        repo = Repository(this, db, SettingsStore(this))
+        // 热点要先于 Repository 建好：局域网检测要用它识别 AP 网卡。
         hotspot = LocalHotspot(this)
+        repo = Repository(this, db, SettingsStore(this))
         share = LanShareServer(this, repo, hotspot)
-        wifiDirect = WifiDirectManager(this)
         ble = BleManager(this)
         repo.attachBle(ble)
         webChat = WebChatServer(this, repo, hotspot)

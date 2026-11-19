@@ -120,7 +120,7 @@ class XlanService : Service() {
                     Mobile.start(
                         filesDir.absolutePath,
                         recvDir,
-                        false
+                        repo.settingsStore().settings.value.autoAcceptAll
                     )
                 }
                 if (generation != gen) return@Thread

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Icon
@@ -67,7 +68,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @Composable
-fun MediaScreen(message: MessageEntity?, onBack: () -> Unit) {
+fun MediaScreen(message: MessageEntity?, onBack: () -> Unit, onShare: () -> Unit) {
     val path = message?.localPath.orEmpty()
     val name = message?.fileName ?: path.substringAfterLast('/')
     val kind = message?.let { previewKindOf(it.fileName ?: it.localPath ?: "") }
@@ -113,6 +114,15 @@ fun MediaScreen(message: MessageEntity?, onBack: () -> Unit) {
                     .weight(1f)
                     .padding(end = 12.dp)
             )
+            if (path.isNotBlank()) {
+                IconButton(onClick = onShare) {
+                    Icon(
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = "分享",
+                        tint = Color.White
+                    )
+                }
+            }
         }
     }
 }

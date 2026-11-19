@@ -103,11 +103,29 @@ class Repository(
     val settings = settingsStore.settings
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val lanMonitor = LanMonitor(app)
+    private val lanMonitor = LanMonitor(app) {
+        (app as XlanApp).hotspot.linkAddress()
+    }
     val lan: StateFlow<LanState> = lanMonitor.state
 
     init {
         lanMonitor.start()
+        scope.launch {
+            (app as XlanApp).hotspot.state.collect { state ->
+                lanMonitor.recheck()
+                if (state !is HotspotState.Running) return@collect
+                // 热点网卡拿到 IPv4 有几秒延迟，没取到就接着补，最多等 15 秒。
+                var waited = 0
+                while (waited < 30 &&
+                    (app as XlanApp).hotspot.state.value is HotspotState.Running &&
+                    lanMonitor.state.value.info == null
+                ) {
+                    delay(500)
+                    lanMonitor.recheck()
+                    waited++
+                }
+            }
+        }
     }
 
     @Volatile
@@ -1815,6 +1833,14 @@ class Repository(
 
     fun relayKick(roomId: String, deviceId: String) {
         relay?.kick(roomId, deviceId)
+    }
+
+    fun relayUnban(roomId: String, deviceId: String) {
+        relay?.unban(roomId, deviceId)
+    }
+
+    fun requestRelayBans(roomId: String) {
+        relay?.requestBans(roomId)
     }
 
     fun relayRename(roomId: String, name: String) {

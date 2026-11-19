@@ -164,6 +164,11 @@ export type RelayMember = {
   creator: boolean
 }
 
+export type RelayBan = {
+  deviceId: string
+  name: string
+}
+
 export type RelayState = {
   configured: boolean
   connected: boolean
@@ -175,6 +180,7 @@ export type RelayState = {
   error?: string
   rooms: RelayRoom[]
   members: Record<string, RelayMember[]>
+  bans: Record<string, RelayBan[]>
 }
 
 export type SeedColor =
@@ -199,6 +205,7 @@ export type Settings = {
   closeToTray: boolean
   quickPreview: boolean
   enterToSend: boolean
+  autoAcceptAll: boolean
   misans: boolean
   bleEnabled: boolean
   webChat: boolean
@@ -382,8 +389,10 @@ export type XtApi = {
   relaySendFiles: (roomId: string, paths: string[]) => Promise<void>
   relayRecall: (roomId: string, messageId: string) => Promise<void>
   relayKick: (roomId: string, deviceId: string) => Promise<void>
+  relayUnban: (roomId: string, deviceId: string) => Promise<void>
   relayRename: (roomId: string, name: string) => Promise<void>
   relayMembers: (roomId: string) => Promise<void>
+  relayBans: (roomId: string) => Promise<void>
   relayTest: (address: string) => Promise<{ ok: boolean; name?: string; error?: string }>
   relayDownload: (messageId: string) => Promise<string>
   relayCache: (messageId: string) => Promise<string>
@@ -394,4 +403,6 @@ export type XtApi = {
   version: () => Promise<{ app: string; xlan: string }>
   accentColor: () => Promise<string>
   openExternal: (url: string) => Promise<void>
+  sharePackage: () => Promise<FileEntry | null>
+  copyFile: (filePath: string) => Promise<boolean>
 }

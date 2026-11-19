@@ -20,6 +20,8 @@ type RawConfig = {
 
 export class XlanService {
   private recvDir: string
+  // 打开后所有对端发来的文件都不再逐条确认，直接接收。
+  autoAccept = false
 
   constructor(
     private readonly dir: string,
@@ -134,7 +136,7 @@ export class XlanService {
     const existing = await this.probe()
     if (existing) return existing
 
-    spawn(this.exe, ['serve', '-d'], {
+    spawn(this.exe, ['serve', '-d', ...(this.autoAccept ? ['--auto-accept'] : [])], {
       cwd: this.dir,
       windowsHide: true,
       stdio: 'ignore'

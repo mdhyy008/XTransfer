@@ -117,6 +117,7 @@ type Props = {
   onLeaveRoom?: () => void
   trusted?: boolean
   onSetTrust: (trusted: boolean) => void
+  autoAcceptAll?: boolean
   publicNotify?: boolean
   onSetPublicNotify: (enabled: boolean) => void
   alias?: string
@@ -305,6 +306,24 @@ function useThumb(message: Message): string | null {
   return thumb
 }
 
+// 文件名拆成「开头」和「结尾」两段交给 flex 布局：结尾含后缀固定不收缩，
+// 只让开头在窄气泡里省略，宽时拼起来就是完整文件名。宽度按全角字算两个单位。
+function splitFileName(name: string): [string, string] {
+  const unit = (ch: string): number => ((ch.codePointAt(0) ?? 0) > 255 ? 2 : 1)
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : ''
+  const stem = ext ? name.slice(0, dot) : name
+  let tail = ''
+  let used = 0
+  for (const ch of [...stem].reverse()) {
+    const u = unit(ch)
+    if (used + u > 8) break
+    tail = ch + tail
+    used += u
+  }
+  return [stem.slice(0, stem.length - tail.length), tail + ext]
+}
+
 function FileCard({
   message,
   mine,
@@ -338,13 +357,14 @@ function FileCard({
     (mine ? message.status === 'queued' || message.status === 'sending' || active : active)
   const openable = !missing && (message.status === 'done' || message.status === 'duplicate')
   const thumb = useThumb(message)
+  const [nameHead, nameTail] = splitFileName(message.file_name || '未命名')
   return (
     <Box
       onClick={openable ? onOpen : undefined}
       onContextMenu={onContextMenu}
       sx={{
-        minWidth: 250,
-        maxWidth: 360,
+        width: 300,
+        maxWidth: '100%',
         borderRadius: '18px',
         border: 1,
         borderColor: 'divider',
@@ -384,9 +404,26 @@ function FileCard({
           )}
         </Box>
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography noWrap sx={{ fontSize: 13.5, fontWeight: 500 }}>
-            {message.file_name || '未命名'}
-          </Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              minWidth: 0,
+              fontSize: 13.5,
+              fontWeight: 500,
+              lineHeight: 1.43,
+              letterSpacing: '0.01071em'
+            }}
+          >
+            <Box
+              component="span"
+              sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {nameHead}
+            </Box>
+            <Box component="span" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+              {nameTail}
+            </Box>
+          </Box>
           <StatusLine message={message} mine={mine} missing={missing} />
         </Box>
         {canCancel && (
@@ -618,6 +655,7 @@ export default function ChatPane({
   onLeaveRoom,
   trusted,
   onSetTrust,
+  autoAcceptAll,
   publicNotify,
   onSetPublicNotify,
   alias,
@@ -806,6 +844,7 @@ export default function ChatPane({
   const relayConnecting = isRelay && relay?.connecting === true
   const relayIsCreator = relayRoom?.creator !== undefined && relayRoom.creator === relay?.deviceId
   const relayMembers = isRelay ? ((relay?.members ?? {})[relayRoomId] ?? []) : []
+  const relayBans = isRelay ? ((relay?.bans ?? {})[relayRoomId] ?? []) : []
   const roomInfoCreator = relayRoom?.creator ?? ''
   const roomInfoCreatorName =
     roomInfoCreator === ''
@@ -904,13 +943,12 @@ export default function ChatPane({
       .catch((error) => notify(error instanceof Error ? error.message : '打开失败', 'error'))
   }
 
-  const copyPath = (message: Message): void => {
+  const copyFile = (message: Message): void => {
     closeMenu()
     if (!message.local_path) return
-    navigator.clipboard
-      .writeText(message.local_path)
-      .then(() => notify('已复制'))
-      .catch(() => notify('复制失败', 'error'))
+    void window.xt
+      .copyFile(message.local_path)
+      .then((ok) => notify(ok ? '已复制文件' : '复制失败', ok ? 'success' : 'error'))
   }
 
   const downloadRelayFile = (message: Message): void => {
@@ -1123,7 +1161,7 @@ export default function ChatPane({
       messageMenuItems.push(<MenuItem onClick={() => copyText(menuMessage)}>复制文本</MenuItem>)
     }
     if (!menuIsText && menuHasPath && menuMessage) {
-      messageMenuItems.push(<MenuItem onClick={() => copyPath(menuMessage)}>复制文件路径</MenuItem>)
+      messageMenuItems.push(<MenuItem onClick={() => copyFile(menuMessage)}>复制文件</MenuItem>)
     }
     if (menuIsAttach && menuMessage) {
       messageMenuItems.push(
@@ -1387,6 +1425,7 @@ export default function ChatPane({
                       setTrustAnchor(null)
                       setMembersOpen(true)
                       window.xt.relayMembers(relayRoomId).catch(() => {})
+                      if (relayIsCreator) window.xt.relayBans(relayRoomId).catch(() => {})
                     }}
                   >
                     群成员
@@ -1514,13 +1553,15 @@ export default function ChatPane({
                 <>
                   <MenuItem
                     sx={{ gap: 2, pr: 1 }}
+                    disabled={autoAcceptAll}
                     onClick={() => onSetTrust(!trusted)}
                   >
                     <Typography sx={{ flex: 1, fontSize: 14 }}>自动接收文件</Typography>
                     <Switch
                       size="small"
                       edge="end"
-                      checked={!!trusted}
+                      disabled={autoAcceptAll}
+                      checked={autoAcceptAll || !!trusted}
                       onClick={(event) => event.stopPropagation()}
                       onChange={(event) => onSetTrust(event.target.checked)}
                     />
@@ -2264,6 +2305,7 @@ export default function ChatPane({
                     onClick={() =>
                       window.xt
                         .relayKick(relayRoomId, member.deviceId)
+                        .then(() => window.xt.relayBans(relayRoomId).catch(() => {}))
                         .catch((error: unknown) =>
                           notify(error instanceof Error ? error.message : '移出失败', 'error')
                         )
@@ -2274,6 +2316,41 @@ export default function ChatPane({
                 )}
               </Box>
             ))
+          )}
+          {relayIsCreator && (
+            <>
+              <Divider sx={{ my: 1.5 }} />
+              <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>黑名单</Typography>
+              {relayBans.length === 0 ? (
+                <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>暂无</Typography>
+              ) : (
+                relayBans.map((ban) => (
+                  <Box
+                    key={ban.deviceId}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}
+                  >
+                    <Typography noWrap sx={{ flex: 1, fontSize: 14 }}>
+                      {ban.name || ban.deviceId}
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() =>
+                        window.xt
+                          .relayUnban(relayRoomId, ban.deviceId)
+                          .catch((error: unknown) =>
+                            notify(
+                              error instanceof Error ? error.message : '移出黑名单失败',
+                              'error'
+                            )
+                          )
+                      }
+                    >
+                      移出黑名单
+                    </Button>
+                  </Box>
+                ))
+              )}
+            </>
           )}
         </DialogContent>
         <DialogActions>

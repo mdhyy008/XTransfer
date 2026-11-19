@@ -19,8 +19,12 @@ data class LanState(val known: Boolean = false, val info: LanInfo? = null)
 
 /**
  * 监听设备是否接入局域网（Wi-Fi / 以太网，且已拿到 IPv4），并给出接口名与 CIDR。
+ * 热点（AP 模式）的网卡不会出现在 ConnectivityManager 的网络列表里，用 hotspotLink 回退识别。
  */
-class LanMonitor(context: Context) {
+class LanMonitor(
+    context: Context,
+    private val hotspotLink: () -> Pair<String, Int>? = { null }
+) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     private val nets = ConcurrentHashMap<Network, LanInfo>()
     private val _state = MutableStateFlow(LanState())
@@ -52,7 +56,13 @@ class LanMonitor(context: Context) {
 
     private fun currentLan(): LanInfo? = runCatching {
         cm.allNetworks.firstNotNullOfOrNull { lanOf(it) }
-    }.getOrNull()
+    }.getOrNull() ?: hotspotLan()
+
+    // 热点开着时 Wi-Fi 处于 AP 模式，地址只能从热点自身取；与界面顶栏共用同一份。
+    private fun hotspotLan(): LanInfo? {
+        val link = runCatching { hotspotLink() }.getOrNull() ?: return null
+        return LanInfo("热点", "${link.first}/${link.second}")
+    }
 
     private fun refresh(network: Network) {
         val info = lanOf(network)
@@ -78,6 +88,9 @@ class LanMonitor(context: Context) {
     }
 
     private fun publish() {
-        _state.value = LanState(known = true, info = nets.values.firstOrNull())
+        _state.value = LanState(known = true, info = nets.values.firstOrNull() ?: hotspotLan())
     }
+
+    // 热点开关会改变网卡拓扑，它一变就重新算一次。
+    fun recheck() = publish()
 }

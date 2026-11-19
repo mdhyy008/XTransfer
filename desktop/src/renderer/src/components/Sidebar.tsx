@@ -624,7 +624,25 @@ export default function Sidebar({
   )
   // 只在真正发起连接时提示；等待重连的间隙不挂在这里，免得一直显示「正在连接」。
   const relayBusy = relay?.connecting === true && !relay?.error
-  const relayShown = relay?.connected === true || relayBusy
+  // 公网分组上次是显示的：启动先按记忆放出来，3 秒内连上就保持，连不上再收起。
+  const [relayGroupRemembered, setRelayGroupRemembered] = useState(
+    () => localStorage.getItem('xlan.relayGroupShown') === '1'
+  )
+  const [relayGraceOver, setRelayGraceOver] = useState(false)
+  useEffect(() => {
+    setRelayGraceOver(false)
+    const timer = window.setTimeout(() => setRelayGraceOver(true), 3000)
+    return () => window.clearTimeout(timer)
+  }, [])
+  useEffect(() => {
+    if (relay?.connected !== true) return
+    localStorage.setItem('xlan.relayGroupShown', '1')
+    setRelayGroupRemembered(true)
+  }, [relay?.connected])
+  const relayShown =
+    relay?.connected === true ||
+    relayBusy ||
+    (relay?.configured === true && relayGroupRemembered && !relayGraceOver)
   const dms = filtered.filter(
     (conv) =>
       conv.id !== PUBLIC_CONVERSATION_ID &&

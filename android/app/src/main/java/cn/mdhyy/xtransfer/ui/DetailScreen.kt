@@ -59,6 +59,7 @@ import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.SaveAlt
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Logout
@@ -208,6 +209,7 @@ fun DetailScreen(
     publicNotify: Boolean,
     quickPreview: Boolean,
     enterToSend: Boolean,
+    autoAcceptAll: Boolean,
     bucketItems: List<BucketItem>,
     offline: Boolean,
     lanOnline: Boolean,
@@ -222,7 +224,8 @@ fun DetailScreen(
     onOpenBucket: () -> Unit,
     onSendBucket: () -> Unit,
     onOpenMedia: (MessageEntity) -> Unit,
-    onOpenApps: () -> Unit
+    onOpenApps: () -> Unit,
+    onShareFile: (MessageEntity) -> Unit
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -245,6 +248,7 @@ fun DetailScreen(
         relayRoom.creator.isNotBlank() &&
         relayRoom.creator == relayState.deviceId
     val relayMembers = if (isRelay) relayState.members[relayRoomId].orEmpty() else emptyList()
+    val relayBans = if (isRelay) relayState.bans[relayRoomId].orEmpty() else emptyList()
     val bleManager = (context.applicationContext as XlanApp).ble
     val bleState by bleManager.state.collectAsStateWithLifecycle()
     val webChat = (context.applicationContext as XlanApp).webChat
@@ -823,6 +827,9 @@ fun DetailScreen(
                                     membersOpen = true
                                     scope.launch {
                                         runCatching { relayManager.requestMembers(relayRoomId) }
+                                        if (relayIsCreator) {
+                                            runCatching { relayManager.requestBans(relayRoomId) }
+                                        }
                                     }
                                 }
                             )
@@ -910,11 +917,14 @@ fun DetailScreen(
                         } else if (target != null) {
                             DropdownMenuItem(
                                 text = { Text("自动接收文件") },
+                                enabled = !autoAcceptAll,
                                 onClick = { onSetTrust(target.trusted != true) },
                                 trailingIcon = {
                                     Switch(
-                                        checked = target.trusted,
-                                        onCheckedChange = { onSetTrust(it) }
+                                        checked = autoAcceptAll || target.trusted,
+                                        onCheckedChange = if (autoAcceptAll) null else {
+                                            { onSetTrust(it) }
+                                        }
                                     )
                                 }
                             )
@@ -1126,6 +1136,7 @@ fun DetailScreen(
                                     .onFailure { context.showError(it.message ?: "删除失败") }
                             }
                         },
+                        onShareFile = onShareFile,
                         onDeleteFile = { target ->
                             scope.launch {
                                 runCatching {
@@ -1550,10 +1561,47 @@ fun DetailScreen(
                                         scope.launch {
                                             runCatching {
                                                 relayManager.requestMembers(relayRoomId)
+                                                relayManager.requestBans(relayRoomId)
                                             }
                                         }
                                     }
                                 ) { Text("移出") }
+                            }
+                        }
+                    }
+                    if (relayIsCreator) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            text = "黑名单",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (relayBans.isEmpty()) {
+                            Text(
+                                text = "暂无",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        }
+                        relayBans.forEach { ban ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = ban.name.ifBlank { ban.deviceId },
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                TextButton(
+                                    onClick = { repo.relayUnban(relayRoomId, ban.deviceId) }
+                                ) { Text("移出黑名单") }
                             }
                         }
                     }
@@ -1873,6 +1921,7 @@ private fun MessageRow(
     onDownload: (MessageEntity) -> Unit,
     onShowError: (MessageEntity) -> Unit,
     onDelete: (String) -> Unit,
+    onShareFile: (MessageEntity) -> Unit,
     onDeleteFile: (MessageEntity) -> Unit
 ) {
     val context = LocalContext.current
@@ -1919,6 +1968,7 @@ private fun MessageRow(
             onShowInfo = onShowInfo,
             onSaveAs = onSaveAs,
             onDownload = onDownload,
+            onShareFile = onShareFile,
             onDelete = {
                 menuOpen = false
                 confirmDelete = true
@@ -2182,6 +2232,7 @@ private fun MessageMenuItems(
     onShowInfo: (MessageEntity) -> Unit,
     onSaveAs: (MessageEntity) -> Unit,
     onDownload: (MessageEntity) -> Unit,
+    onShareFile: (MessageEntity) -> Unit,
     onDelete: () -> Unit
 ) {
     val body = message.body
@@ -2215,6 +2266,7 @@ private fun MessageMenuItems(
             add(MessageMenuAction("查看文件信息", Icons.Rounded.Info) { onShowInfo(message) })
             if (message.kind == "file" && !missing && !message.localPath.isNullOrBlank()) {
                 add(MessageMenuAction("另存为…", Icons.Rounded.SaveAlt) { onSaveAs(message) })
+                add(MessageMenuAction("分享文件", Icons.Rounded.Share) { onShareFile(message) })
             }
             if (!missing && !message.localPath.isNullOrBlank()) {
                 add(MessageMenuAction("用其他应用打开", Icons.Rounded.OpenInNew) {
@@ -2371,12 +2423,22 @@ private fun FileCard(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = message.fileName ?: "未命名",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    val (nameHead, nameTail) = splitFileName(message.fileName ?: "未命名")
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = nameHead,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Text(
+                            text = nameTail,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                     StatusLine(message = message, mine = mine, missing = missing)
                 }
                 if (canCancel) {

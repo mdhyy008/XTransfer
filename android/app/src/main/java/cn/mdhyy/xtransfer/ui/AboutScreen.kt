@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,7 +65,7 @@ private val OPEN_SOURCE = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AboutScreen(onBack: () -> Unit) {
+fun AboutScreen(onBack: () -> Unit, onOpenShare: () -> Unit) {
     val context = LocalContext.current
     val versionName = remember {
         runCatching {
@@ -141,6 +142,13 @@ fun AboutScreen(onBack: () -> Unit) {
                             )
                         }
                     }
+                )
+                SettingDivider()
+                SettingRow(
+                    icon = Icons.Rounded.Share,
+                    title = "分享本软件",
+                    showChevron = true,
+                    onClick = onOpenShare
                 )
             }
             SectionTitle("本软件开源地址")

@@ -347,3 +347,22 @@ fun SectionLabel(text: String) {
             .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 2.dp)
     )
 }
+
+// 文件名拆成「开头」和「结尾」两段交给布局：结尾含后缀固定不收缩，只让开头省略。
+// 宽度按全角字算两个单位。
+fun splitFileName(name: String): Pair<String, String> {
+    fun unit(c: Char) = if (c.code > 255) 2 else 1
+    val dot = name.lastIndexOf('.')
+    val ext = if (dot > 0 && name.length - dot in 1..12) name.substring(dot) else ""
+    val stem = if (ext.isEmpty()) name else name.substring(0, dot)
+    val tail = buildString {
+        var used = 0
+        for (c in stem.reversed()) {
+            val u = unit(c)
+            if (used + u > 8) break
+            insert(0, c)
+            used += u
+        }
+    }
+    return stem.dropLast(tail.length) to (tail + ext)
+}

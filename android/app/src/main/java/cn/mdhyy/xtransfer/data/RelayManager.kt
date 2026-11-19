@@ -62,6 +62,11 @@ data class RelayMember(
     val creator: Boolean
 )
 
+data class RelayBan(
+    val deviceId: String,
+    val name: String
+)
+
 data class RelayState(
     val configured: Boolean = false,
     val connected: Boolean = false,
@@ -72,7 +77,8 @@ data class RelayState(
     val maxFileSize: Long = 0,
     val error: String? = null,
     val rooms: List<RelayRoom> = emptyList(),
-    val members: Map<String, List<RelayMember>> = emptyMap()
+    val members: Map<String, List<RelayMember>> = emptyMap(),
+    val bans: Map<String, List<RelayBan>> = emptyMap()
 )
 
 class RelayManager(
@@ -103,6 +109,7 @@ class RelayManager(
     private var maxFileSize = 0L
     private var rooms: MutableList<RelayRoom> = mutableListOf()
     private var members: MutableMap<String, List<RelayMember>> = mutableMapOf()
+    private var bans: MutableMap<String, List<RelayBan>> = mutableMapOf()
     private var retry = RECONNECT_MIN
     private var reconnectJob: Job? = null
     private var errorJob: Job? = null
@@ -129,6 +136,7 @@ class RelayManager(
         error = ""
         rooms = mutableListOf()
         members = mutableMapOf()
+        bans = mutableMapOf()
         serverName = ""
         maxFileSize = 0
         if (next.isEmpty()) {
@@ -270,6 +278,16 @@ class RelayManager(
     fun kick(roomId: String, target: String) {
         if (roomId.isEmpty() || target.isEmpty()) return
         send(JSONObject().put("type", "kick").put("room", roomId).put("deviceId", target))
+    }
+
+    fun unban(roomId: String, target: String) {
+        if (roomId.isEmpty() || target.isEmpty()) return
+        send(JSONObject().put("type", "unban").put("room", roomId).put("deviceId", target))
+    }
+
+    fun requestBans(roomId: String) {
+        if (roomId.isEmpty() || ws == null || !connected) return
+        send(JSONObject().put("type", "bans").put("room", roomId))
     }
 
     fun rename(roomId: String, name: String) {
@@ -455,6 +473,7 @@ class RelayManager(
             "left", "kicked" -> removeRoom(data.optString("room"))
             "room" -> handleRoom(data)
             "members" -> handleMembers(data)
+            "bans" -> handleBans(data)
             "message" -> data.optJSONObject("message")?.let { ingest(it, true) }
             "history" -> handleHistory(data)
             "ack" -> handleAck(data.optString("id"))
@@ -479,6 +498,9 @@ class RelayManager(
                 ensureConversation(room.id, roomLabel(room.id))
                 sendSafe(JSONObject().put("type", "history").put("room", room.id).put("limit", 60))
                 sendSafe(JSONObject().put("type", "members").put("room", room.id))
+                if (room.creator == deviceId) {
+                    sendSafe(JSONObject().put("type", "bans").put("room", room.id))
+                }
             }
         }
     }
@@ -494,6 +516,9 @@ class RelayManager(
             ensureConversation(room.id, roomLabel(room.id))
             sendSafe(JSONObject().put("type", "history").put("room", room.id).put("limit", 60))
             sendSafe(JSONObject().put("type", "members").put("room", room.id))
+            if (room.creator == deviceId) {
+                sendSafe(JSONObject().put("type", "bans").put("room", room.id))
+            }
         }
         pendingRoom?.let {
             if (!it.isCompleted) it.complete(room.id)
@@ -529,6 +554,21 @@ class RelayManager(
             )
         }
         members = members.toMutableMap().apply { put(roomId, list) }
+        emit()
+    }
+
+    private fun handleBans(data: JSONObject) {
+        val roomId = data.optString("room")
+        if (roomId.isEmpty()) return
+        val array = data.optJSONArray("bans") ?: JSONArray()
+        val list = ArrayList<RelayBan>(array.length())
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val id = item.optString("deviceId")
+            if (id.isEmpty()) continue
+            list += RelayBan(id, item.optString("name").ifBlank { id })
+        }
+        bans = bans.toMutableMap().apply { put(roomId, list) }
         emit()
     }
 
@@ -832,6 +872,7 @@ class RelayManager(
         if (roomId.isEmpty()) return
         rooms = rooms.filter { it.id != roomId }.toMutableList()
         members = members.toMutableMap().apply { remove(roomId) }
+        bans = bans.toMutableMap().apply { remove(roomId) }
         emit()
         scope.launch { dropConversation(RELAY_CONVERSATION_PREFIX + roomId) }
     }
@@ -878,7 +919,8 @@ class RelayManager(
             maxFileSize = maxFileSize,
             error = error.takeIf { it.isNotBlank() },
             rooms = rooms.toList(),
-            members = members.toMap()
+            members = members.toMap(),
+            bans = bans.toMap()
         )
     }
 

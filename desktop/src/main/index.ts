@@ -13,6 +13,7 @@ import {
   systemPreferences,
   Tray
 } from 'electron'
+import archiver from 'archiver'
 import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -836,6 +837,7 @@ const settings = new SettingsStore(path.join(DATA_DIR, 'settings.json'))
 const db = new Db(DATA_DIR)
 const state = new AppState(db)
 const service = new XlanService(XLAN_DIR, settings.recvDir || RECV_DIR)
+service.autoAccept = settings.value.autoAcceptAll
 const sender = new FileSender(service.exe, XLAN_DIR, db, (messageIds) => {
   if (messageIds && messageIds.length > 0) queueMessageUpdate(messageIds)
   else state.emit()
@@ -2078,6 +2080,7 @@ function openPreview(target: string): void {
     minHeight: 320,
     frame: false,
     show: false,
+    icon: assetPath('icon.png'),
     title: path.basename(target),
     backgroundColor: dark ? '#141218' : '#FDF7FF',
     webPreferences: {
@@ -2195,6 +2198,45 @@ function notifyItem(item: Item): void {
 function sendUiAction(action: 'bucket' | 'files' | 'share' | 'settings'): void {
   showWindow()
   win?.webContents.send('ui:action', action)
+}
+
+let packagingApp = false
+
+// 把当前程序目录压成便携包放进临时目录，用于「通过文件分发」。
+async function packageAppForShare(): Promise<FileEntry | null> {
+  if (packagingApp) throw new Error('正在打包，请稍候')
+  packagingApp = true
+  try {
+    const version = app.getVersion().replace('-Beta', 'Beta')
+    const outDir = path.join(TMP_DIR, 'share')
+    fs.mkdirSync(outDir, { recursive: true })
+    const outFile = path.join(outDir, `X互传-${version}.zip`)
+    await new Promise<void>((resolve, reject) => {
+      const output = fs.createWriteStream(outFile)
+      const archive = archiver('zip', { zlib: { level: 6 } })
+      output.on('close', resolve)
+      output.on('error', reject)
+      archive.on('error', reject)
+      archive.pipe(output)
+      const skipDirs = new Set(['data', 'recv', 'node_modules', '.git', 'out', 'release'])
+      const walk = (dir: string, base: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (base === '' && (skipDirs.has(entry.name) || /^XTransfer-.*\.zip$/i.test(entry.name))) {
+            continue
+          }
+          const full = path.join(dir, entry.name)
+          const rel = base ? `${base}/${entry.name}` : entry.name
+          if (entry.isDirectory()) walk(full, rel)
+          else if (entry.isFile()) archive.file(full, { name: rel })
+        }
+      }
+      walk(APP_DIR, '')
+      void archive.finalize()
+    })
+    return inspectEntries([outFile])[0] ?? null
+  } finally {
+    packagingApp = false
+  }
 }
 
 function createTray(): void {
@@ -3306,6 +3348,35 @@ function registerIpc(): void {
     xlan: state.info?.version ?? ''
   }))
 
+  ipcMain.handle('app:sharePackage', () => packageAppForShare())
+
+  // Electron 没法把文件本身写进 Windows 剪贴板，交给系统自带的 PowerShell。
+  ipcMain.handle('app:copyFile', (_event, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath) return false
+    if (process.platform !== 'win32') {
+      clipboard.writeText(filePath)
+      return true
+    }
+    return new Promise<boolean>((resolve) => {
+      const child = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-Sta',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          assetPath('copy-file.ps1'),
+          '-Path',
+          filePath
+        ],
+        { windowsHide: true, stdio: 'ignore' }
+      )
+      child.on('error', () => resolve(false))
+      child.on('exit', (code) => resolve(code === 0))
+    })
+  })
+
   ipcMain.handle('app:accentColor', () => {
     try {
       const raw = String(systemPreferences.getAccentColor() || '').replace(/^#/, '')
@@ -3394,21 +3465,30 @@ function registerIpc(): void {
   ipcMain.handle('relay:kick', (_event, roomId: string, deviceId: string) =>
     relay.kick(roomId ?? '', deviceId ?? '')
   )
+  ipcMain.handle('relay:unban', (_event, roomId: string, deviceId: string) =>
+    relay.unban(roomId ?? '', deviceId ?? '')
+  )
   ipcMain.handle('relay:rename', (_event, roomId: string, name: string) =>
     relay.rename(roomId ?? '', name ?? '')
   )
   ipcMain.handle('relay:members', (_event, roomId: string) =>
     relay.requestMembers(roomId ?? '')
   )
+  ipcMain.handle('relay:bans', (_event, roomId: string) => relay.requestBans(roomId ?? ''))
   ipcMain.handle('relay:test', (_event, address: string) => relay.testAddress(address ?? ''))
   ipcMain.handle('relay:download', (_event, messageId: string) => relay.saveFile(messageId ?? ''))
   ipcMain.handle('relay:cache', (_event, messageId: string) => relay.cacheFile(messageId ?? ''))
 
-  ipcMain.handle('settings:update', (_event, patch: Partial<Settings>) => {
+  ipcMain.handle('settings:update', async (_event, patch: Partial<Settings>) => {
     settings.update(patch ?? {})
     state.setSettings(settings.value)
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'relayUrl')) {
       relay.setAddress(settings.value.relayUrl)
+    }
+    if (patch?.autoAcceptAll !== undefined && service.autoAccept !== settings.value.autoAcceptAll) {
+      // core 只在启动时读这个开关，改完必须重启服务才生效。
+      service.autoAccept = settings.value.autoAcceptAll
+      await restartService().catch(() => {})
     }
     if (patch?.notifications === false) resetNotices()
     else if (patch?.theme !== undefined) closeNotice()

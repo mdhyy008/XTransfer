@@ -153,10 +153,14 @@ const api: XtApi = {
     ipcRenderer.invoke('relay:recall', roomId, messageId) as Promise<void>,
   relayKick: (roomId: string, deviceId: string) =>
     ipcRenderer.invoke('relay:kick', roomId, deviceId) as Promise<void>,
+  relayUnban: (roomId: string, deviceId: string) =>
+    ipcRenderer.invoke('relay:unban', roomId, deviceId) as Promise<void>,
   relayRename: (roomId: string, name: string) =>
     ipcRenderer.invoke('relay:rename', roomId, name) as Promise<void>,
   relayMembers: (roomId: string) =>
     ipcRenderer.invoke('relay:members', roomId) as Promise<void>,
+  relayBans: (roomId: string) =>
+    ipcRenderer.invoke('relay:bans', roomId) as Promise<void>,
   relayTest: (address: string) =>
     ipcRenderer.invoke('relay:test', address) as Promise<{
       ok: boolean
@@ -172,7 +176,9 @@ const api: XtApi = {
   close: () => ipcRenderer.send('win:close'),
   version: () => ipcRenderer.invoke('app:version'),
   accentColor: () => ipcRenderer.invoke('app:accentColor') as Promise<string>,
-  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url) as Promise<void>
+  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url) as Promise<void>,
+  sharePackage: () => ipcRenderer.invoke('app:sharePackage') as Promise<FileEntry | null>,
+  copyFile: (filePath: string) => ipcRenderer.invoke('app:copyFile', filePath) as Promise<boolean>
 }
 
 contextBridge.exposeInMainWorld('xt', api)

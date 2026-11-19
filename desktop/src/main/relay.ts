@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { RelayMember, RelayRoom, RelayState } from '../shared/types'
+import type { RelayBan, RelayMember, RelayRoom, RelayState } from '../shared/types'
 import type { Db } from './db'
 
 const PUBLIC_ROOM_ID = 'public'
@@ -28,6 +28,11 @@ type ServerMember = {
   platform?: string
   online?: boolean
   creator?: boolean
+}
+
+type ServerBan = {
+  deviceId?: string
+  name?: string
 }
 
 type ServerMessage = {
@@ -125,6 +130,7 @@ export class RelayService {
   private maxFileSize = 0
   private rooms: RelayRoom[] = []
   private members: Record<string, RelayMember[]> = {}
+  private bans: Record<string, RelayBan[]> = {}
   private retry = RECONNECT_MIN
   private reconnectTimer: NodeJS.Timeout | null = null
   private connectTimer: NodeJS.Timeout | null = null
@@ -151,7 +157,8 @@ export class RelayService {
       maxFileSize: this.maxFileSize || undefined,
       error: this.error || undefined,
       rooms: this.rooms,
-      members: this.members
+      members: this.members,
+      bans: this.bans
     }
   }
 
@@ -168,6 +175,7 @@ export class RelayService {
     this.error = ''
     this.rooms = []
     this.members = {}
+    this.bans = {}
     this.serverName = ''
     this.maxFileSize = 0
     if (!next) {
@@ -306,6 +314,11 @@ export class RelayService {
     this.send({ type: 'kick', room: roomId, deviceId })
   }
 
+  unban(roomId: string, deviceId: string): void {
+    if (!roomId || !deviceId) return
+    this.send({ type: 'unban', room: roomId, deviceId })
+  }
+
   rename(roomId: string, name: string): void {
     const value = (name ?? '').trim().slice(0, 32)
     if (!roomId || !value) return
@@ -316,6 +329,11 @@ export class RelayService {
     if (!roomId) return
     // 未连接时静默跳过，成员列表会在连上后重新同步。
     this.sendSafe({ type: 'members', room: roomId })
+  }
+
+  requestBans(roomId: string): void {
+    if (!roomId) return
+    this.sendSafe({ type: 'bans', room: roomId })
   }
 
   // 设备名改了要让服务端和房间里的人看到新名字，重连一次最省事。
@@ -531,6 +549,9 @@ export class RelayService {
       case 'members':
         this.handleMembers(data)
         break
+      case 'bans':
+        this.handleBans(data)
+        break
       case 'message':
         this.handleMessage((data.message ?? {}) as ServerMessage)
         break
@@ -560,6 +581,7 @@ export class RelayService {
       this.options.db.ensureRelayConversation(room.id, this.roomLabel(room.id))
       this.sendSafe({ type: 'history', room: room.id, limit: 60 })
       this.sendSafe({ type: 'members', room: room.id })
+      if (room.creator === this.deviceId) this.sendSafe({ type: 'bans', room: room.id })
     }
     this.emit()
     this.options.onChange()
@@ -575,6 +597,7 @@ export class RelayService {
     this.options.db.ensureRelayConversation(room.id, this.roomLabel(room.id))
     this.sendSafe({ type: 'history', room: room.id, limit: 60 })
     this.sendSafe({ type: 'members', room: room.id })
+    if (room.creator === this.deviceId) this.sendSafe({ type: 'bans', room: room.id })
     this.emit()
     this.options.onChange()
     if (this.pendingJoin) {
@@ -589,6 +612,7 @@ export class RelayService {
     if (!roomId) return
     this.rooms = this.rooms.filter((room) => room.id !== roomId)
     delete this.members[roomId]
+    delete this.bans[roomId]
     this.options.db.dropConversation(`relay:${roomId}`)
     this.emit()
     this.options.onChange()
@@ -620,6 +644,22 @@ export class RelayService {
           platform: member.platform ? String(member.platform) : undefined,
           online: member.online !== false,
           creator: member.creator === true
+        }))
+    }
+    this.emit()
+  }
+
+  private handleBans(data: Record<string, unknown>): void {
+    const roomId = String(data.room ?? '')
+    if (!roomId) return
+    const list = Array.isArray(data.bans) ? (data.bans as ServerBan[]) : []
+    this.bans = {
+      ...this.bans,
+      [roomId]: list
+        .filter((ban) => ban.deviceId)
+        .map((ban) => ({
+          deviceId: String(ban.deviceId),
+          name: String(ban.name || ban.deviceId)
         }))
     }
     this.emit()

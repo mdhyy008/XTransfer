@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,18 +30,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -142,6 +148,16 @@ fun FileManagerScreen(
     var renameDraft by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<File?>(null) }
     var tick by remember { mutableIntStateOf(0) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var multiDelete by remember { mutableStateOf(false) }
+
+    fun exitSelection() {
+        selecting = false
+        selected = emptySet()
+    }
+
+    BackHandler(enabled = selecting) { exitSelection() }
 
     LaunchedEffect(recvDir, refreshKey, tick) {
         if (tick > 0) delay(200)
@@ -209,14 +225,58 @@ fun FileManagerScreen(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        Text(
-            text = "文件管理",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp)
-        )
+        if (selecting) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { exitSelection() }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "退出多选")
+                }
+                Text(
+                    text = "已选 ${selected.size}",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    enabled = selected.isNotEmpty(),
+                    onClick = {
+                        val paths = selected.toList()
+                        val hasFolder = paths.any { File(it).isDirectory }
+                        if (hasFolder) {
+                            context.showError("文件夹不能分享")
+                        } else {
+                            exitSelection()
+                            shareFilesExternally(context, paths)
+                        }
+                    }
+                ) {
+                    Icon(Icons.Rounded.Share, contentDescription = "分享")
+                }
+                IconButton(
+                    enabled = selected.isNotEmpty(),
+                    onClick = { multiDelete = true }
+                ) {
+                    Icon(
+                        Icons.Rounded.Delete,
+                        contentDescription = "删除",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        } else {
+            Text(
+                text = "接收文件管理",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp)
+            )
+        }
         if (files.isNotEmpty()) {
             OutlinedTextField(
                 value = query,
@@ -274,10 +334,37 @@ fun FileManagerScreen(
                     items(list, key = { it.absolutePath }) { file ->
                         FileManagerRow(
                             file = file,
-                            onOpen = { open(file) },
-                            onLongPress = { menuFile = file },
+                            selecting = selecting,
+                            selected = selecting && file.absolutePath in selected,
+                            onOpen = {
+                                if (selecting) {
+                                    selected = if (file.absolutePath in selected) {
+                                        selected - file.absolutePath
+                                    } else {
+                                        selected + file.absolutePath
+                                    }
+                                } else {
+                                    open(file)
+                                }
+                            },
+                            onLongPress = {
+                                if (selecting) {
+                                    selected = if (file.absolutePath in selected) {
+                                        selected - file.absolutePath
+                                    } else {
+                                        selected + file.absolutePath
+                                    }
+                                } else {
+                                    menuFile = file
+                                }
+                            },
                             menuOpen = menuFile?.absolutePath == file.absolutePath,
                             onMenuDismiss = { menuFile = null },
+                            onMultiSelect = {
+                                menuFile = null
+                                selecting = true
+                                selected = setOf(file.absolutePath)
+                            },
                             onRename = {
                                 menuFile = null
                                 renameDraft = baseNameOf(file)
@@ -375,16 +462,46 @@ fun FileManagerScreen(
             }
         )
     }
+
+    if (multiDelete) {
+        AlertDialog(
+            onDismissRequest = { multiDelete = false },
+            title = { Text("删除") },
+            text = { Text("删除已选的 ${selected.size} 项？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        var failed = false
+                        selected.forEach { path ->
+                            if (!File(path).deleteRecursively()) failed = true
+                        }
+                        multiDelete = false
+                        exitSelection()
+                        if (failed) context.showError("部分文件删除失败")
+                        tick++
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { multiDelete = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FileManagerRow(
     file: File,
+    selecting: Boolean,
+    selected: Boolean,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     menuOpen: Boolean,
     onMenuDismiss: () -> Unit,
+    onMultiSelect: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -398,6 +515,9 @@ private fun FileManagerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(
+                    if (selected) colors.primaryContainer.copy(alpha = 0.4f) else Color.Transparent
+                )
                 .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -477,6 +597,19 @@ private fun FileManagerRow(
                     }
                 }
             }
+            if (selecting) {
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    imageVector = if (selected) {
+                        Icons.Rounded.CheckCircle
+                    } else {
+                        Icons.Rounded.RadioButtonUnchecked
+                    },
+                    contentDescription = null,
+                    tint = if (selected) colors.primary else colors.outline,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
         }
         if (menuOpen) {
             ModalBottomSheet(
@@ -493,6 +626,8 @@ private fun FileManagerRow(
                         onMenuDismiss()
                         onOpen()
                     }
+                    FileMenuDivider()
+                    FileMenuRow(Icons.Rounded.CheckCircle, "多选") { onMultiSelect() }
                     FileMenuDivider()
                     FileMenuRow(Icons.Rounded.ContentCopy, "复制路径") {
                         val clipboard =

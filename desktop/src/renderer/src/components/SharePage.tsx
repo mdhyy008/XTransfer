@@ -79,6 +79,8 @@ function ShareThumb({ entry }: { entry: FileEntry }) {
 
 export default function SharePage({
   bucket,
+  autoStart,
+  onAutoStarted,
   onAddFiles,
   onAddImages,
   onAddApks,
@@ -88,6 +90,8 @@ export default function SharePage({
   notify
 }: {
   bucket: FileEntry[]
+  autoStart?: boolean
+  onAutoStarted?: () => void
   onAddFiles: () => void
   onAddImages: () => void
   onAddApks: () => void
@@ -136,6 +140,14 @@ export default function SharePage({
       alive = false
     }
   }, [qrOpen, url])
+
+  // 从预览/聊天/分享软件页带着文件进来时，到页即自动开始分发。
+  useEffect(() => {
+    if (!autoStart || bucket.length === 0 || running || busy) return
+    void start()
+    onAutoStarted?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, bucket.length])
 
   const start = async (): Promise<void> => {
     if (busy) return

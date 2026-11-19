@@ -1,12 +1,23 @@
 package cn.mdhyy.xtransfer.ui
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiNetworkSpecifier
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -34,6 +45,7 @@ import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,6 +76,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.mdhyy.xtransfer.XlanApp
 import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.wifiQrPayload
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.text.SimpleDateFormat
@@ -89,6 +107,45 @@ fun HotspotScreen(onBack: () -> Unit) {
         if (hotspot.granted()) hotspot.start() else launcher.launch(hotspot.permission)
     }
 
+    var pendingWifi by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val wifiPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        val target = pendingWifi
+        pendingWifi = null
+        if (target == null) return@rememberLauncherForActivityResult
+        if (granted.values.all { it }) {
+            connectWifi(context, target.first, target.second)
+        } else {
+            context.showError("没有连接 Wi-Fi 的权限")
+        }
+    }
+    var scanning by remember { mutableStateOf(false) }
+
+    fun handleScan(contents: String): Boolean {
+        val wifi = parseWifiQr(contents) ?: return false
+        scanning = false
+        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        val granted = perms.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (granted) {
+            connectWifi(context, wifi.first, wifi.second)
+        } else {
+            pendingWifi = wifi
+            wifiPermissionLauncher.launch(perms)
+        }
+        return true
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
@@ -98,7 +155,7 @@ fun HotspotScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
-                }
+                },
             )
         }
     ) { innerPadding ->
@@ -149,10 +206,48 @@ fun HotspotScreen(onBack: () -> Unit) {
                             Text("系统热点设置")
                         }
                     }
+                    Spacer(Modifier.height(24.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HorizontalDivider(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        Text(
+                            text = "or",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    FilledTonalButton(onClick = { scanning = true }) {
+                        Text("扫码连接热点")
+                    }
                 }
             }
             Spacer(Modifier.height(40.dp))
         }
+    }
+
+    AnimatedVisibility(
+        visible = scanning,
+        enter = slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(200)),
+        exit = slideOutVertically(tween(280, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(200))
+    ) {
+        WifiQrScannerOverlay(
+            onClose = { scanning = false },
+            onResult = { handleScan(it) }
+        )
+    }
     }
 }
 
@@ -330,6 +425,72 @@ internal fun qrBitmap(content: String, size: Int): Bitmap? = runCatching {
         setPixels(pixels, 0, matrix.width, 0, 0, matrix.width, matrix.height)
     }
 }.getOrNull()
+
+// 解析 WIFI:T:WPA;S:ssid;P:pass;; 这一格式，字段里的 \; \, \\ \: 要还原。
+private fun parseWifiQr(text: String): Pair<String, String>? {
+    if (!text.startsWith("WIFI:", ignoreCase = true)) return null
+    val fields = HashMap<String, String>()
+    val current = StringBuilder()
+    var key: String? = null
+    var escaped = false
+    for (ch in text.substring(5)) {
+        when {
+            escaped -> {
+                current.append(ch)
+                escaped = false
+            }
+            ch == '\\' -> escaped = true
+            ch == ';' -> {
+                key?.let { fields[it] = current.toString() }
+                current.setLength(0)
+                key = null
+            }
+            ch == ':' && key == null -> {
+                key = current.toString().trim().uppercase()
+                current.setLength(0)
+            }
+            else -> current.append(ch)
+        }
+    }
+    val ssid = fields["S"]?.takeIf { it.isNotBlank() } ?: return null
+    return ssid to fields["P"].orEmpty()
+}
+
+private fun connectWifi(context: Context, ssid: String, password: String) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        runCatching {
+            context.getSystemService(ClipboardManager::class.java)
+                ?.setPrimaryClip(ClipData.newPlainText("wifi", password))
+            context.startActivity(
+                Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { context.showError("无法打开 Wi-Fi 设置") }
+        context.toast("密码已复制")
+        return
+    }
+    val specifier = WifiNetworkSpecifier.Builder()
+        .setSsid(ssid)
+        .apply { if (password.isNotEmpty()) setWpa2Passphrase(password) }
+        .build()
+    val request = NetworkRequest.Builder()
+        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .setNetworkSpecifier(specifier)
+        .build()
+    val manager = context.getSystemService(ConnectivityManager::class.java)
+    if (manager == null) {
+        context.showError("无法连接 Wi-Fi")
+        return
+    }
+    manager.requestNetwork(request, object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            context.toast("已连接 $ssid")
+        }
+
+        override fun onUnavailable() {
+            context.showError("连接失败，请在系统 Wi-Fi 设置中连接")
+        }
+    })
+}
 
 private fun openTetherSettings(context: Context) {
     val candidates = listOf(

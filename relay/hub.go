@@ -233,6 +233,10 @@ func (h *Hub) handle(c *client, in wsIn) {
 		h.recall(c, in)
 	case "kick":
 		h.kick(c, in)
+	case "unban":
+		h.unban(c, in)
+	case "bans":
+		h.sendBans(c, in.Room)
 	case "rename":
 		h.rename(c, in)
 	case "ping":
@@ -279,6 +283,10 @@ func (h *Hub) joinRoom(c *client, in wsIn) {
 	}
 	if room == nil {
 		c.sendError("房间不存在")
+		return
+	}
+	if h.store.IsBanned(room.ID, c.deviceID) {
+		c.sendError("你已被移出该房间，无法再次加入")
 		return
 	}
 	if err := h.store.AddMember(room.ID, c.deviceID, c.name, c.platform); err != nil {
@@ -443,14 +451,72 @@ func (h *Hub) kick(c *client, in wsIn) {
 		c.sendError("不能移除这个成员")
 		return
 	}
+	name := h.store.MemberName(room.ID, target)
+	if tc := h.clientOf(target); tc != nil && tc.name != "" {
+		name = tc.name
+	}
 	if err := h.store.RemoveMember(room.ID, target); err != nil {
 		c.sendError("移除失败")
+		return
+	}
+	// 踢出即拉黑：对方再拿房间号加入会被挡下，除非群主手动移出黑名单。
+	if err := h.store.AddBan(room.ID, target, name); err != nil {
+		c.sendError("加入黑名单失败")
 		return
 	}
 	if tc := h.clientOf(target); tc != nil {
 		tc.sendJSON(map[string]any{"type": "kicked", "room": room.ID})
 	}
+	h.sendBans(c, room.ID)
 	h.broadcastMembers(room.ID)
+}
+
+func (h *Hub) unban(c *client, in wsIn) {
+	room, err := h.store.RoomByID(in.Room)
+	if err != nil || room == nil {
+		c.sendError("房间不存在")
+		return
+	}
+	if room.Creator != c.deviceID {
+		c.sendError("没有管理权限")
+		return
+	}
+	target := strings.TrimSpace(in.Target)
+	if target == "" {
+		c.sendError("参数错误")
+		return
+	}
+	if err := h.store.RemoveBan(room.ID, target); err != nil {
+		c.sendError("移出黑名单失败")
+		return
+	}
+	h.sendBans(c, room.ID)
+}
+
+func (h *Hub) sendBans(c *client, roomID string) {
+	room, err := h.store.RoomByID(roomID)
+	if err != nil || room == nil {
+		c.sendError("房间不存在")
+		return
+	}
+	if room.Creator != c.deviceID {
+		c.sendError("没有管理权限")
+		return
+	}
+	bans, err := h.store.Bans(room.ID)
+	if err != nil {
+		c.sendError("读取黑名单失败")
+		return
+	}
+	out := make([]map[string]any, 0, len(bans))
+	for _, b := range bans {
+		out = append(out, map[string]any{
+			"deviceId": b.DeviceID,
+			"name":     b.Name,
+			"bannedAt": b.BannedAt,
+		})
+	}
+	c.sendJSON(map[string]any{"type": "bans", "room": room.ID, "bans": out})
 }
 
 func (h *Hub) rename(c *client, in wsIn) {

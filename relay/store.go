@@ -34,6 +34,12 @@ type FileInfo struct {
 	Mime string
 }
 
+type Ban struct {
+	DeviceID string
+	Name     string
+	BannedAt int64
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS rooms (
   id         TEXT PRIMARY KEY,
@@ -50,6 +56,14 @@ CREATE TABLE IF NOT EXISTS members (
   name      TEXT NOT NULL DEFAULT '',
   platform  TEXT NOT NULL DEFAULT '',
   joined_at INTEGER NOT NULL,
+  PRIMARY KEY (room_id, device_id)
+);
+
+CREATE TABLE IF NOT EXISTS bans (
+  room_id   TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  name      TEXT NOT NULL DEFAULT '',
+  banned_at INTEGER NOT NULL,
   PRIMARY KEY (room_id, device_id)
 );
 
@@ -281,6 +295,61 @@ func (s *Store) RemoveMember(roomID, deviceID string) error {
 		`DELETE FROM members WHERE room_id = ? AND device_id = ?`, roomID, deviceID,
 	)
 	return err
+}
+
+func (s *Store) MemberName(roomID, deviceID string) string {
+	var name string
+	_ = s.db.QueryRow(
+		`SELECT name FROM members WHERE room_id = ? AND device_id = ?`, roomID, deviceID,
+	).Scan(&name)
+	return name
+}
+
+// AddBan 把被移出的设备记进房间黑名单，之后它再也加不回来。
+func (s *Store) AddBan(roomID, deviceID, name string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO bans (room_id, device_id, name, banned_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(room_id, device_id) DO UPDATE SET
+		   name = excluded.name,
+		   banned_at = excluded.banned_at`,
+		roomID, deviceID, name, now(),
+	)
+	return err
+}
+
+func (s *Store) RemoveBan(roomID, deviceID string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM bans WHERE room_id = ? AND device_id = ?`, roomID, deviceID,
+	)
+	return err
+}
+
+func (s *Store) IsBanned(roomID, deviceID string) bool {
+	var one int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM bans WHERE room_id = ? AND device_id = ?`, roomID, deviceID,
+	).Scan(&one)
+	return err == nil
+}
+
+func (s *Store) Bans(roomID string) ([]Ban, error) {
+	rows, err := s.db.Query(
+		`SELECT device_id, name, banned_at FROM bans WHERE room_id = ? ORDER BY banned_at ASC`,
+		roomID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Ban
+	for rows.Next() {
+		var b Ban
+		if err := rows.Scan(&b.DeviceID, &b.Name, &b.BannedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 // UpdateProfile 设备改名后，把它在全部房间里的名字一起换掉。
