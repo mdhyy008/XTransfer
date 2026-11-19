@@ -3,6 +3,8 @@
 
 !ifndef BUILD_UNINSTALLER
   Var xltNonCDir
+  Var xltKeepDir
+  Var xltDataPath
 !endif
 
 !macro customWelcomePage
@@ -31,7 +33,70 @@
   ${Loop}
 !macroend
 
+; 覆盖安装时，旧版卸载器会把整个安装目录清空；先把 data 挪到同一块盘的旁边，装完再挪回。
+; 目录被正在运行的程序锁住时先结束进程再试一次，两次都失败就放弃（不影响正常安装）。
+!macro xltParkData
+  StrCpy $xltKeepDir ""
+  StrCpy $xltDataPath ""
+  ReadRegStr $R0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+  ${If} $R0 == ""
+    ReadRegStr $R0 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
+  ${EndIf}
+  ${If} $R0 != ""
+  ${AndIf} ${FileExists} "$R0\data"
+    StrCpy $xltDataPath "$R0\data"
+    StrCpy $xltKeepDir "$R0\..\${APP_FILENAME}-data-keep"
+    ; 上次安装中断留下的备份先放回原位，免得越积越多。
+    ${If} ${FileExists} "$xltKeepDir"
+    ${AndIfNot} ${FileExists} "$xltDataPath"
+      Rename "$xltKeepDir" "$xltDataPath"
+    ${EndIf}
+    ${If} ${FileExists} "$xltKeepDir"
+      StrCpy $xltKeepDir ""
+      StrCpy $xltDataPath ""
+    ${Else}
+      ClearErrors
+      Rename "$xltDataPath" "$xltKeepDir"
+      ${If} ${Errors}
+        nsExec::Exec 'taskkill /F /IM "${APP_EXECUTABLE_FILENAME}"'
+        Pop $R1
+        Sleep 800
+        ClearErrors
+        Rename "$xltDataPath" "$xltKeepDir"
+        ${If} ${Errors}
+          StrCpy $xltKeepDir ""
+          StrCpy $xltDataPath ""
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro xltRestoreData _TARGET
+  ${If} $xltKeepDir != ""
+    ${If} ${FileExists} "$xltKeepDir"
+      ${IfNot} ${FileExists} "${_TARGET}"
+        Rename "$xltKeepDir" "${_TARGET}"
+      ${EndIf}
+    ${EndIf}
+    StrCpy $xltKeepDir ""
+    StrCpy $xltDataPath ""
+  ${EndIf}
+!macroend
+
+!macro customInstall
+  !insertmacro xltRestoreData "$INSTDIR\data"
+!macroend
+
+; 用户在向导中途取消时，把挪走的 data 放回原处。
+!ifndef BUILD_UNINSTALLER
+Function .onGUIEnd
+  !insertmacro xltRestoreData "$xltDataPath"
+FunctionEnd
+!endif
+
 !macro customInit
+  !insertmacro xltParkData
   !insertmacro xltPickNonCDir
   ${If} $xltNonCDir != ""
     StrCpy $INSTDIR $xltNonCDir
