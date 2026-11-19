@@ -3471,6 +3471,7 @@ function registerIpc(): void {
   ipcMain.handle('relay:rename', (_event, roomId: string, name: string) =>
     relay.rename(roomId ?? '', name ?? '')
   )
+  ipcMain.handle('relay:dissolve', (_event, roomId: string) => relay.dissolve(roomId ?? ''))
   ipcMain.handle('relay:members', (_event, roomId: string) =>
     relay.requestMembers(roomId ?? '')
   )

@@ -823,6 +823,18 @@ function Shell() {
                   notify(error instanceof Error ? error.message : '退出失败', 'error')
                 )
             }}
+            onDissolveRoom={() => {
+              const roomId = conv.id.slice('relay:'.length)
+              window.xt
+                .relayDissolve(roomId)
+                .then(() => {
+                  setSelectedId(PUBLIC_CONVERSATION_ID)
+                  notify('房间已解散')
+                })
+                .catch((error) =>
+                  notify(error instanceof Error ? error.message : '解散失败', 'error')
+                )
+            }}
             trusted={conv.id === PUBLIC_CONVERSATION_ID ? undefined : peer?.trusted}
             autoAcceptAll={snapshot?.settings.autoAcceptAll ?? false}
             onSetTrust={(trusted) => {

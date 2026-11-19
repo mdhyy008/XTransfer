@@ -239,6 +239,8 @@ func (h *Hub) handle(c *client, in wsIn) {
 		h.sendBans(c, in.Room)
 	case "rename":
 		h.rename(c, in)
+	case "dissolve":
+		h.dissolveRoom(c, in)
 	case "ping":
 		c.sendJSON(map[string]any{"type": "pong"})
 	default:
@@ -540,6 +542,35 @@ func (h *Hub) rename(c *client, in wsIn) {
 	}
 	room.Name = name
 	h.broadcastRoom(room.ID, map[string]any{"type": "room", "room": h.roomView(*room)})
+}
+
+func (h *Hub) dissolveRoom(c *client, in wsIn) {
+	room, err := h.store.RoomByID(in.Room)
+	if err != nil || room == nil {
+		c.sendError("房间不存在")
+		return
+	}
+	if room.Creator != c.deviceID {
+		c.sendError("没有管理权限")
+		return
+	}
+	if room.ID == publicRoomID {
+		c.sendError("不能解散公网广播")
+		return
+	}
+	ids, err := h.store.MemberIDs(room.ID)
+	if err != nil {
+		c.sendError("解散失败")
+		return
+	}
+	for _, id := range ids {
+		if tc := h.clientOf(id); tc != nil {
+			tc.sendJSON(map[string]any{"type": "dissolved", "room": room.ID})
+		}
+	}
+	if err := h.store.DeleteRoom(room.ID); err != nil {
+		c.sendError("解散失败")
+	}
 }
 
 func (h *Hub) broadcastMembers(roomID string) {

@@ -296,6 +296,11 @@ class RelayManager(
         send(JSONObject().put("type", "rename").put("room", roomId).put("name", value))
     }
 
+    fun dissolveRoom(roomId: String) {
+        if (roomId.isEmpty()) return
+        send(JSONObject().put("type", "dissolve").put("room", roomId))
+    }
+
     fun requestMembers(roomId: String) {
         if (roomId.isEmpty() || ws == null || !connected) return
         send(JSONObject().put("type", "members").put("room", roomId))
@@ -470,7 +475,7 @@ class RelayManager(
         when (data.optString("type")) {
             "ready" -> handleReady(data)
             "joined" -> handleJoined(data)
-            "left", "kicked" -> removeRoom(data.optString("room"))
+            "left", "kicked", "dissolved" -> removeRoom(data.optString("room"))
             "room" -> handleRoom(data)
             "members" -> handleMembers(data)
             "bans" -> handleBans(data)

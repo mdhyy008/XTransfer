@@ -115,6 +115,7 @@ type Props = {
   bluetooth?: BleState
   relay?: RelayState
   onLeaveRoom?: () => void
+  onDissolveRoom?: () => void
   trusted?: boolean
   onSetTrust: (trusted: boolean) => void
   autoAcceptAll?: boolean
@@ -653,6 +654,7 @@ export default function ChatPane({
   bluetooth,
   relay,
   onLeaveRoom,
+  onDissolveRoom,
   trusted,
   onSetTrust,
   autoAcceptAll,
@@ -710,6 +712,7 @@ export default function ChatPane({
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [leaveOpen, setLeaveOpen] = useState(false)
+  const [dissolveOpen, setDissolveOpen] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -1442,6 +1445,15 @@ export default function ChatPane({
                       >
                         修改群名
                       </MenuItem>
+                      <MenuItem
+                        sx={{ color: 'error.main' }}
+                        onClick={() => {
+                          setTrustAnchor(null)
+                          setDissolveOpen(true)
+                        }}
+                      >
+                        解散房间
+                      </MenuItem>
                     </>
                   )}
                   <Divider />
@@ -1453,16 +1465,20 @@ export default function ChatPane({
                   >
                     清空聊天记录
                   </MenuItem>
-                  <Divider />
-                  <MenuItem
-                    sx={{ color: 'error.main' }}
-                    onClick={() => {
-                      setTrustAnchor(null)
-                      setLeaveOpen(true)
-                    }}
-                  >
-                    退出房间
-                  </MenuItem>
+                  {!relayIsCreator && (
+                    <>
+                      <Divider />
+                      <MenuItem
+                        sx={{ color: 'error.main' }}
+                        onClick={() => {
+                          setTrustAnchor(null)
+                          setLeaveOpen(true)
+                        }}
+                      >
+                        退出房间
+                      </MenuItem>
+                    </>
+                  )}
                 </>
               ) : isPublic || relayPublic ? (
                 <>
@@ -2406,6 +2422,28 @@ export default function ChatPane({
             }}
           >
             退出
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={dissolveOpen} onClose={() => setDissolveOpen(false)}>
+        <DialogTitle sx={{ fontSize: 18 }}>解散房间</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: 14 }}>
+            解散后该房间和聊天记录都会被删除，确定要解散吗？
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDissolveOpen(false)}>取消</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              setDissolveOpen(false)
+              onDissolveRoom?.()
+            }}
+          >
+            解散
           </Button>
         </DialogActions>
       </Dialog>

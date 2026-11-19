@@ -397,6 +397,7 @@ fun DetailScreen(
     var renameOpen by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf("") }
     var leaveOpen by remember { mutableStateOf(false) }
+    var dissolveOpen by remember { mutableStateOf(false) }
 
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("*/*")
@@ -842,6 +843,13 @@ fun DetailScreen(
                                         renameOpen = true
                                     }
                                 )
+                                DropdownMenuItem(
+                                    text = { Text("解散房间") },
+                                    onClick = {
+                                        menuOpen = false
+                                        dissolveOpen = true
+                                    }
+                                )
                             }
                             HorizontalDivider()
                             DropdownMenuItem(
@@ -851,14 +859,16 @@ fun DetailScreen(
                                     confirmClear = true
                                 }
                             )
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("退出房间") },
-                                onClick = {
-                                    menuOpen = false
-                                    leaveOpen = true
-                                }
-                            )
+                            if (!relayIsCreator) {
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("退出房间") },
+                                    onClick = {
+                                        menuOpen = false
+                                        leaveOpen = true
+                                    }
+                                )
+                            }
                         } else if (isPublic) {
                             DropdownMenuItem(
                                 text = { Text("允许通知") },
@@ -1706,6 +1716,27 @@ fun DetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { leaveOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (dissolveOpen) {
+        AlertDialog(
+            onDismissRequest = { dissolveOpen = false },
+            title = { Text("解散房间") },
+            text = { Text("解散后「$titleName」的房间和聊天记录都会删除，确定要解散吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        dissolveOpen = false
+                        repo.relayDissolve(relayRoomId)
+                        context.toast("房间已解散")
+                        onBack()
+                    }
+                ) { Text("解散") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dissolveOpen = false }) { Text("取消") }
             }
         )
     }

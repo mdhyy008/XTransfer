@@ -157,6 +157,8 @@ const api: XtApi = {
     ipcRenderer.invoke('relay:unban', roomId, deviceId) as Promise<void>,
   relayRename: (roomId: string, name: string) =>
     ipcRenderer.invoke('relay:rename', roomId, name) as Promise<void>,
+  relayDissolve: (roomId: string) =>
+    ipcRenderer.invoke('relay:dissolve', roomId) as Promise<void>,
   relayMembers: (roomId: string) =>
     ipcRenderer.invoke('relay:members', roomId) as Promise<void>,
   relayBans: (roomId: string) =>

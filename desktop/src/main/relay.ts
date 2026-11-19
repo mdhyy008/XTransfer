@@ -325,6 +325,11 @@ export class RelayService {
     this.send({ type: 'rename', room: roomId, name: value })
   }
 
+  dissolve(roomId: string): void {
+    if (!roomId) return
+    this.send({ type: 'dissolve', room: roomId })
+  }
+
   requestMembers(roomId: string): void {
     if (!roomId) return
     // 未连接时静默跳过，成员列表会在连上后重新同步。
@@ -541,6 +546,9 @@ export class RelayService {
         this.removeRoom(String(data.room ?? ''))
         break
       case 'kicked':
+        this.removeRoom(String(data.room ?? ''))
+        break
+      case 'dissolved':
         this.removeRoom(String(data.room ?? ''))
         break
       case 'room':

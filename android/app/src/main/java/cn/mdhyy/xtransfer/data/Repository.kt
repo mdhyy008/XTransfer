@@ -1847,6 +1847,10 @@ class Repository(
         relay?.rename(roomId, name)
     }
 
+    fun relayDissolve(roomId: String) {
+        relay?.dissolveRoom(roomId)
+    }
+
     suspend fun relayCacheFile(message: MessageEntity): File =
         relay?.cacheFile(message) ?: throw IllegalStateException("公网聊天室未连接")
 

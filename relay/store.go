@@ -297,6 +297,26 @@ func (s *Store) RemoveMember(roomID, deviceID string) error {
 	return err
 }
 
+// DeleteRoom 解散房间：成员、黑名单和消息一并清掉。
+func (s *Store) DeleteRoom(roomID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, query := range []string{
+		`DELETE FROM messages WHERE room_id = ?`,
+		`DELETE FROM members WHERE room_id = ?`,
+		`DELETE FROM bans WHERE room_id = ?`,
+		`DELETE FROM rooms WHERE id = ?`,
+	} {
+		if _, err := tx.Exec(query, roomID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) MemberName(roomID, deviceID string) string {
 	var name string
 	_ = s.db.QueryRow(

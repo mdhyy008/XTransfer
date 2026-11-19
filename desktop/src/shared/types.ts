@@ -391,6 +391,7 @@ export type XtApi = {
   relayKick: (roomId: string, deviceId: string) => Promise<void>
   relayUnban: (roomId: string, deviceId: string) => Promise<void>
   relayRename: (roomId: string, name: string) => Promise<void>
+  relayDissolve: (roomId: string) => Promise<void>
   relayMembers: (roomId: string) => Promise<void>
   relayBans: (roomId: string) => Promise<void>
   relayTest: (address: string) => Promise<{ ok: boolean; name?: string; error?: string }>
