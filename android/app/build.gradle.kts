@@ -21,8 +21,8 @@ android {
         applicationId = "cn.mdhyy.xtransfer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
-        versionName = "0.4.6Beta"
+        versionCode = 50
+        versionName = "0.4.8Beta"
         ndk {
             abiFilters += "arm64-v8a"
         }

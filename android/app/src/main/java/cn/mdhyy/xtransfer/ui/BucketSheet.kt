@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.NoteAdd
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -66,6 +68,15 @@ import java.io.File
 private val BUCKET_ROW_HEIGHT = 56.dp
 private const val BUCKET_VISIBLE_ROWS = 5
 private val BUCKET_ICON_SIZE = 24.dp
+
+private data class BucketTip(val icon: ImageVector, val title: String, val detail: String)
+
+private val BUCKET_TIPS = listOf(
+    BucketTip(Icons.Rounded.NoteAdd, "添加文件", "点右上角「添加文件」选择"),
+    BucketTip(Icons.Rounded.CreateNewFolder, "添加文件夹", "点右上角「添加文件夹」选择"),
+    BucketTip(Icons.Rounded.ContentPaste, "粘贴", "点「粘贴」存入剪贴板里的文件"),
+    BucketTip(Icons.Rounded.Share, "系统分享", "其他应用里分享到 X互传，没有在线设备时会存入这里")
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Suppress("DEPRECATION")
@@ -156,18 +167,57 @@ fun BucketSheet(
             Spacer(Modifier.height(6.dp))
             val listHeight = BUCKET_ROW_HEIGHT * BUCKET_VISIBLE_ROWS
             if (items.isEmpty()) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(listHeight),
-                    contentAlignment = Alignment.Center
+                        .height(listHeight)
+                        .padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Inventory2,
                         contentDescription = "暂存桶为空",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        modifier = Modifier.size(72.dp)
+                        modifier = Modifier
+                            .size(44.dp)
+                            .align(Alignment.CenterHorizontally)
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "暂存桶是空的，这样加文件：",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    BUCKET_TIPS.forEach { tip ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = tip.icon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = tip.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = tip.detail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             } else {
                 LazyColumn(modifier = Modifier.height(listHeight)) {

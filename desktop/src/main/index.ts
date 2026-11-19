@@ -2122,6 +2122,20 @@ function showWindow(): void {
   win.focus()
 }
 
+// Windows 前台锁：刚退出的外部窗口会把焦点交还给资源管理器，只 focus 抢不回来。
+// 短暂置顶再取消，确保主窗口真正回到最前面。
+function bringWindowToFront(): void {
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.setAlwaysOnTop(true)
+  win.focus()
+  app.focus({ steal: true })
+  setTimeout(() => {
+    if (win && !win.isDestroyed()) win.setAlwaysOnTop(false)
+  }, 150)
+}
+
 async function refreshInfo(): Promise<void> {
   if (!endpoint) return
   const info = await request<DeviceInfo>(endpoint, 'GET', '/v1/info')
@@ -3305,8 +3319,7 @@ function registerIpc(): void {
     } finally {
       capturingShot = false
       if (wasVisible && win && !win.isDestroyed()) {
-        win.show()
-        win.focus()
+        bringWindowToFront()
       }
     }
   })

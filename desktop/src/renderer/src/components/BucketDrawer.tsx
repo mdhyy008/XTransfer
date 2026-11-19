@@ -17,6 +17,7 @@ import {
 } from '@mui/material'
 import AddPhotoAlternateRounded from '@mui/icons-material/AddPhotoAlternateRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
+import ContentPasteRounded from '@mui/icons-material/ContentPasteRounded'
 import CreateNewFolderRounded from '@mui/icons-material/CreateNewFolderRounded'
 import DeleteSweepRounded from '@mui/icons-material/DeleteSweepRounded'
 import DescriptionRounded from '@mui/icons-material/DescriptionRounded'
@@ -40,6 +41,23 @@ type Props = {
   onRemove: (path: string) => void
   onClear: () => void
 }
+
+const BUCKET_TIPS = [
+  { icon: <DriveFileMoveRounded />, title: '拖进主窗口', detail: '把文件或文件夹拖到窗口任意位置' },
+  { icon: <NoteAddRounded />, title: '添加文件', detail: '点击上方「添加文件」选择' },
+  { icon: <CreateNewFolderRounded />, title: '添加文件夹', detail: '点击上方「添加文件夹」选择' },
+  {
+    icon: <ContentPasteRounded />,
+    title: '粘贴',
+    detail: '在窗口里按 Ctrl+V，把复制的文件或截图存进来'
+  },
+  { icon: <ScreenshotRounded />, title: '截图', detail: '在对话里点击截图按钮' },
+  {
+    icon: <AddPhotoAlternateRounded />,
+    title: '桌面接收区',
+    detail: '把文件拖到屏幕右上角，选「存入暂存桶」'
+  }
+]
 
 function EntryIcon({ entry }: { entry: FileEntry }) {
   const [thumb, setThumb] = useState<string | null>(null)
@@ -229,7 +247,26 @@ export default function BucketDrawer({
           )
         })}
         {entries.length === 0 && (
-          <Typography sx={{ px: 3, py: 3, fontSize: 13, color: 'text.secondary' }}>暂无项目</Typography>
+          <Box sx={{ px: 3, pt: 2 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'text.secondary', pb: 1 }}>
+              暂存桶是空的，这样加文件：
+            </Typography>
+            <List disablePadding>
+              {BUCKET_TIPS.map((item) => (
+                <ListItem key={item.title} disableGutters sx={{ py: 0.25 }}>
+                  <ListItemIcon sx={{ minWidth: 32, color: 'text.secondary' }}>{item.icon}</ListItemIcon>
+                  <ListItemText
+                    primary={item.title}
+                    secondary={item.detail}
+                    slotProps={{
+                      primary: { sx: { fontSize: 13 } },
+                      secondary: { sx: { fontSize: 11.5 } }
+                    }}
+                  />
+                </ListItem>
+              ))}
+            </List>
+          </Box>
         )}
       </List>
     </Drawer>
@@ -238,17 +275,7 @@ export default function BucketDrawer({
       <DialogTitle sx={{ fontSize: 16, fontWeight: 600, pb: 0.5 }}>存入暂存桶</DialogTitle>
       <DialogContent sx={{ pt: 1, pb: 2 }}>
         <List disablePadding>
-          {[
-            { icon: <DriveFileMoveRounded />, title: '拖进主窗口', detail: '把文件或文件夹拖到窗口任意位置' },
-            { icon: <NoteAddRounded />, title: '添加文件', detail: '点击上方「添加文件」选择' },
-            { icon: <CreateNewFolderRounded />, title: '添加文件夹', detail: '点击上方「添加文件夹」选择' },
-            { icon: <ScreenshotRounded />, title: '截图', detail: '在对话里点击截图按钮' },
-            {
-              icon: <AddPhotoAlternateRounded />,
-              title: '桌面接收区',
-              detail: '把文件拖到屏幕右上角，选「存入暂存桶」'
-            }
-          ].map((item) => (
+          {BUCKET_TIPS.map((item) => (
             <ListItem key={item.title} disableGutters sx={{ py: 0.75 }}>
               <ListItemIcon sx={{ minWidth: 40, color: 'text.secondary' }}>{item.icon}</ListItemIcon>
               <ListItemText
