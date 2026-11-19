@@ -321,7 +321,8 @@ class RelayManager(
             ?: Build.MODEL?.takeIf { it.isNotBlank() }
             ?: "安卓设备"
 
-    private fun open() {
+    // 自动重试走静默模式：不标「正在连接」，界面就不会一直转圈。
+    private fun open(silent: Boolean = false) {
         if (address.isEmpty() || ws != null) return
         val url = try {
             wsUrl()
@@ -331,9 +332,11 @@ class RelayManager(
             emit()
             return
         }
-        connecting = true
-        error = ""
-        emit()
+        if (!silent) {
+            connecting = true
+            error = ""
+            emit()
+        }
         val gen = ++generation
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -408,14 +411,12 @@ class RelayManager(
 
     private fun scheduleReconnect() {
         if (address.isEmpty() || ws != null || reconnectJob?.isActive == true) return
-        connecting = true
-        emit()
         val delayMs = retry
         retry = min(RECONNECT_MAX, retry * 2)
         reconnectJob = scope.launch {
             delay(delayMs)
             reconnectJob = null
-            open()
+            open(silent = true)
         }
     }
 

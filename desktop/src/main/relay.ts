@@ -380,7 +380,8 @@ export class RelayService {
     return id
   }
 
-  private open(): void {
+  // 自动重试走静默模式：不标「正在连接」，界面就不会一直转圈。
+  private open(silent = false): void {
     if (this.disposed || !this.address || this.ws) return
     let url: URL
     try {
@@ -390,9 +391,11 @@ export class RelayService {
       this.emit()
       return
     }
-    this.connecting = true
-    this.error = ''
-    this.emit()
+    if (!silent) {
+      this.connecting = true
+      this.error = ''
+      this.emit()
+    }
     let ws: WebSocket
     try {
       ws = new WebSocket(url.toString())
@@ -482,11 +485,9 @@ export class RelayService {
 
   private scheduleReconnect(): void {
     if (this.disposed || !this.address || this.ws || this.reconnectTimer) return
-    this.connecting = true
-    this.emit()
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.open()
+      this.open(true)
     }, this.retry)
     this.retry = Math.min(RECONNECT_MAX, this.retry * 2)
   }
