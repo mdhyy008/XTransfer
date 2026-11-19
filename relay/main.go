@@ -40,7 +40,7 @@ func main() {
 	}
 
 	addr := flag.String("addr", "127.0.0.1:43500", "监听地址，通常放在反向代理后面")
-	dataDir := flag.String("data", "data", "数据目录（SQLite 与文件都放在这里）")
+	dataDir := flag.String("data", "xlan_server_data", "数据目录（SQLite 与文件都放在这里），默认在运行目录下自动生成")
 	publicURL := flag.String("public-url", "", "对外访问地址，例如 https://chat.example.com")
 	keyFlag := flag.String("key", "", "访问密钥；不填则自动生成并保存在数据目录")
 	maxFileMB := flag.Int64("max-file-mb", 10, "单个文件大小上限（MB）")
