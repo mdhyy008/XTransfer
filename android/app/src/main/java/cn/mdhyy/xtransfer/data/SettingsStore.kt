@@ -16,6 +16,7 @@ data class AppSettings(
     val quickPreview: Boolean = true,
     val enterToSend: Boolean = false,
     val autoAcceptAll: Boolean = false,
+    val hideOffline: Boolean = true,
     val misans: Boolean = true,
     val webChat: Boolean = false,
     val relayUrl: String = "",
@@ -40,6 +41,7 @@ class SettingsStore(context: Context) {
             quickPreview = prefs.getBoolean("quickPreview", true),
             enterToSend = prefs.getBoolean("enterToSend", false),
             autoAcceptAll = prefs.getBoolean("autoAcceptAll", false),
+            hideOffline = prefs.getBoolean("hideOffline", true),
             misans = prefs.getBoolean("misans", true),
             webChat = prefs.getBoolean("webChat", false),
             relayUrl = prefs.getString("relayUrl", "") ?: "",
@@ -61,6 +63,7 @@ class SettingsStore(context: Context) {
         quickPreview: Boolean? = null,
         enterToSend: Boolean? = null,
         autoAcceptAll: Boolean? = null,
+        hideOffline: Boolean? = null,
         misans: Boolean? = null,
         webChat: Boolean? = null,
         relayUrl: String? = null,
@@ -80,6 +83,7 @@ class SettingsStore(context: Context) {
             quickPreview = quickPreview ?: current.quickPreview,
             enterToSend = enterToSend ?: current.enterToSend,
             autoAcceptAll = autoAcceptAll ?: current.autoAcceptAll,
+            hideOffline = hideOffline ?: current.hideOffline,
             misans = misans ?: current.misans,
             webChat = webChat ?: current.webChat,
             relayUrl = relayUrl ?: current.relayUrl,
@@ -98,6 +102,7 @@ class SettingsStore(context: Context) {
             .putBoolean("quickPreview", next.quickPreview)
             .putBoolean("enterToSend", next.enterToSend)
             .putBoolean("autoAcceptAll", next.autoAcceptAll)
+            .putBoolean("hideOffline", next.hideOffline)
             .putBoolean("misans", next.misans)
             .putBoolean("webChat", next.webChat)
             .putString("relayUrl", next.relayUrl)

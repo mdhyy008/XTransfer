@@ -8,9 +8,9 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
-import android.util.Log
 import androidx.core.content.ContextCompat
 import cn.mdhyy.xtransfer.XlanApp
+import cn.mdhyy.xtransfer.data.AppLog
 import cn.mdhyy.xtransfer.data.DEFAULT_RECV_FOLDER
 import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.Notifications
@@ -51,7 +51,7 @@ class XlanService : Service() {
             }
         Mobile.setLogger(object : Logger {
             override fun log(msg: String) {
-                Log.i(TAG, msg)
+                AppLog.i(TAG, msg)
             }
         })
         boot()
@@ -125,11 +125,10 @@ class XlanService : Service() {
                 }
                 if (generation != gen) return@Thread
                 started.onSuccess { base ->
-                    Log.i(TAG, "服务已就绪：$base")
                     repo.onServiceStarted(base)
                     return@Thread
                 }.onFailure { error ->
-                    Log.e(TAG, "启动失败", error)
+                    AppLog.e(TAG, "服务启动失败", error)
                     repo.onServiceFailed(describeFailure(error))
                 }
                 try {

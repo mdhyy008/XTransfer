@@ -643,7 +643,19 @@ export default function Sidebar({
     relay?.connected === true ||
     relayBusy ||
     (relay?.configured === true && relayGroupRemembered && !relayGraceOver)
-  const dms = filtered.filter(
+  const hideOffline = settings?.hideOffline !== false
+  // 隐藏离线设备只作用于局域网设备行；公网房间和蓝牙设备的在线状态另有口径。
+  const shown = hideOffline
+    ? filtered.filter(
+        (conv) =>
+          conv.id === PUBLIC_CONVERSATION_ID ||
+          conv.id.startsWith(BLE_PREFIX) ||
+          conv.id.startsWith(RELAY_PREFIX) ||
+          conv.online ||
+          conv.unknown
+      )
+    : filtered
+  const dms = shown.filter(
     (conv) =>
       conv.id !== PUBLIC_CONVERSATION_ID &&
       !conv.id.startsWith(BLE_PREFIX) &&
@@ -885,7 +897,7 @@ export default function Sidebar({
         {searching ? (
           <>
             <Section title="搜索结果">
-              {filtered
+              {shown
                 .filter((conv) => !conv.id.startsWith(BLE_PREFIX))
                 .map((conv) => (
                   <ConvRow
@@ -900,7 +912,7 @@ export default function Sidebar({
                     onContextMenu={(event) => openMenu(event, conv)}
                   />
                 ))}
-              {filtered.filter((conv) => !conv.id.startsWith(BLE_PREFIX)).length === 0 &&
+              {shown.filter((conv) => !conv.id.startsWith(BLE_PREFIX)).length === 0 &&
                 shownBleRows.length === 0 && (
                   <Typography sx={{ px: 2.5, py: 2, fontSize: 13, color: 'text.secondary' }}>
                     没有匹配的会话

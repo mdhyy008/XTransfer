@@ -1,6 +1,6 @@
 {
   "name": "xtransfer-desktop",
-  "version": "0.4.12-Beta",
+  "version": "0.4.34-Beta",
   "private": true,
   "description": "X互传 局域网互传客户端",
   "author": "明灯花月夜",
@@ -22,6 +22,7 @@
     "@mui/material": "^9.5.0",
     "archiver": "^7.0.1",
     "better-sqlite3": "^13.0.3",
+    "koffi": "^3.3.8",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
@@ -76,7 +77,9 @@
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/koffi/**/*",
+      "node_modules/@koromix/**/*"
     ],
     "npmRebuild": false,
     "win": {

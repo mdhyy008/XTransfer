@@ -24,6 +24,7 @@ import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import CodeRounded from '@mui/icons-material/CodeRounded'
 import DataUsageRounded from '@mui/icons-material/DataUsageRounded'
+import DescriptionRounded from '@mui/icons-material/DescriptionRounded'
 import DevicesRounded from '@mui/icons-material/DevicesRounded'
 import FeedbackRounded from '@mui/icons-material/FeedbackRounded'
 import FolderOpenRounded from '@mui/icons-material/FolderOpenRounded'
@@ -47,6 +48,7 @@ import LinkRounded from '@mui/icons-material/LinkRounded'
 import PersonRounded from '@mui/icons-material/PersonRounded'
 import PublicRounded from '@mui/icons-material/PublicRounded'
 import VisibilityRounded from '@mui/icons-material/VisibilityRounded'
+import VisibilityOffRounded from '@mui/icons-material/VisibilityOffRounded'
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
 import ShareRounded from '@mui/icons-material/ShareRounded'
 import type { DoctorResult, FileEntry, Snapshot, ThemeMode } from '../../../shared/types'
@@ -669,6 +671,17 @@ export default function SettingsDialog({
               />
             }
           />
+          <GroupDivider />
+          <Row
+            icon={<VisibilityOffRounded fontSize="small" />}
+            title="隐藏离线设备"
+            trailing={
+              <ToggleSwitch
+                checked={settings?.hideOffline ?? true}
+                onChange={(checked) => patch({ hideOffline: checked })}
+              />
+            }
+          />
         </Section>
 
         <Section title="数据">
@@ -808,6 +821,17 @@ export default function SettingsDialog({
                 }
               />
             }
+          />
+        </Section>
+
+        <Section title="其他">
+          <Row
+            icon={<DescriptionRounded fontSize="small" />}
+            title="运行日志"
+            onClick={() => {
+              window.xt.openLogWindow().catch(() => {})
+            }}
+            trailing={<ChevronRightRounded fontSize="small" sx={{ color: 'text.secondary' }} />}
           />
         </Section>
 

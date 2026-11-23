@@ -97,7 +97,7 @@ private data class HomeTab(val label: String, val icon: ImageVector)
 
 private val HOME_TABS = listOf(
     HomeTab("会话", Icons.Rounded.ChatBubbleOutline),
-    HomeTab("文件管理", Icons.Outlined.Folder),
+    HomeTab("接收文件", Icons.Outlined.Folder),
     HomeTab("内网分发", Icons.Rounded.DeviceHub)
 )
 
@@ -349,6 +349,7 @@ fun AppRoot(
                             aliases = settings.aliases,
                             muted = settings.muted,
                             pinned = settings.pinned,
+                            hideOffline = settings.hideOffline,
                             peakSpeeds = peakSpeeds,
                             testedPeaks = settings.speedPeaks,
                             lanOffline = offline,
@@ -542,8 +543,12 @@ fun AppRoot(
                 deviceCount = conversations.count { it.id != PUBLIC_CONVERSATION_ID },
                 onBack = { nav.popBackStack() },
                 onOpenAbout = { nav.navigate("about") },
-                onOpenTheme = { nav.navigate("theme") }
+                onOpenTheme = { nav.navigate("theme") },
+                onOpenLogs = { nav.navigate("logs") }
             )
+        }
+        composable("logs") {
+            LogsScreen(onBack = { nav.popBackStack() })
         }
         composable("theme") {
             ThemeScreen(

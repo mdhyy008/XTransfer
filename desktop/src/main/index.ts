@@ -24,6 +24,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ClientRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type {
+  AdbDownloadRecord,
   DecisionReq,
   DeviceInfo,
   DoctorResult,
@@ -42,9 +43,12 @@ import type {
   Snapshot
 } from '../shared/types'
 import { PUBLIC_CONVERSATION_ID } from '../shared/types'
+import { Adb } from './adb'
+import { AppLog } from './appLog'
 import { AppState, ONLINE_WINDOW_SEC } from './appState'
 import { BleService } from './bleService'
 import { Db } from './db'
+import { DownloadStore } from './downloads'
 import { FileSender } from './fileSender'
 import { hotspotStart, hotspotStatus, hotspotStop } from './hotspot'
 import { openEventStream, request, type Endpoint } from './localApi'
@@ -63,6 +67,29 @@ const DATA_DIR = path.join(DATA_ROOT, 'data')
 const TMP_DIR = path.join(DATA_DIR, 'tmp')
 const THUMB_DIR = path.join(DATA_DIR, 'thumbs')
 const RELAY_CACHE_DIR = path.join(DATA_DIR, 'relay-cache')
+
+const appLog = new AppLog(path.join(DATA_DIR, 'logs'))
+// 主进程的所有 console 输出同时进日志文件，设置里的日志窗口就能看到完整过程。
+for (const level of ['log', 'info', 'warn', 'error'] as const) {
+  const original = console[level].bind(console)
+  console[level] = (...args: unknown[]): void => {
+    original(...args)
+    appLog.write(
+      `main[${level}]`,
+      args
+        .map((arg) => {
+          if (arg instanceof Error) return arg.stack || `${arg.name}: ${arg.message}`
+          if (typeof arg === 'string') return arg
+          try {
+            return JSON.stringify(arg)
+          } catch {
+            return String(arg)
+          }
+        })
+        .join(' ')
+    )
+  }
+}
 
 const thumbCache = new Map<string, string>()
 function rememberThumb(key: string, url: string): void {
@@ -834,9 +861,15 @@ process.env.TEMP = TMP_DIR
 process.env.TMPDIR = TMP_DIR
 
 const settings = new SettingsStore(path.join(DATA_DIR, 'settings.json'))
+const downloads = new DownloadStore(path.join(DATA_DIR, 'downloads.json'))
+const pullJobs = new Map<string, AbortController>()
 const db = new Db(DATA_DIR)
 const state = new AppState(db)
-const service = new XlanService(XLAN_DIR, settings.recvDir || RECV_DIR)
+// ADB 按需下载到 data/adb，不进安装包，也不依赖系统里预装的版本。
+const adb = new Adb(path.join(DATA_DIR, 'adb'))
+const service = new XlanService(XLAN_DIR, settings.recvDir || RECV_DIR, (source, line) =>
+  appLog.write(source, line)
+)
 service.autoAccept = settings.value.autoAcceptAll
 const sender = new FileSender(service.exe, XLAN_DIR, db, (messageIds) => {
   if (messageIds && messageIds.length > 0) queueMessageUpdate(messageIds)
@@ -1733,7 +1766,7 @@ function resetNotices(): void {
   closeNotice()
 }
 
-// 桌面右上角的拖放接收区：平时点击穿透，光标进入才接收文件拖放。
+// 桌面右上角的拖放接收区：平时点击穿透，按住左键拖着文件经过时才接收。
 const PAD_WIDTH = 468
 const PAD_HEIGHT = 98
 const PAD_EDGE = 20
@@ -1742,9 +1775,28 @@ const PAD_TOP = 56
 let padWin: BrowserWindow | null = null
 let padInteractive = false
 let padDragging = false
+let padDraggingAt = 0
 let padSuspended = false
 let padHoverAt = 0
 let padPoller: NodeJS.Timeout | null = null
+
+// 穿透窗口收不到 drop，只能临时关掉穿透来接文件；用系统左键状态分清
+// 「拖着文件经过」和「普通路过/单击」，后者始终穿透，不再吞掉下层软件的点击。
+let leftButtonDown: (() => boolean) | null = null
+let padProbeReady = false
+
+function initLeftButtonProbe(): void {
+  if (padProbeReady || process.platform !== 'win32') return
+  padProbeReady = true
+  try {
+    const koffi = require('koffi') as typeof import('koffi')
+    const user32 = koffi.load('user32.dll')
+    const getAsyncKeyState = user32.func('short GetAsyncKeyState(int vKey)')
+    leftButtonDown = () => (Number(getAsyncKeyState(0x01)) & 0x8000) !== 0
+  } catch (error) {
+    console.error('[droppad] 左键状态检测不可用，退回悬停激活', error)
+  }
+}
 
 function padBounds(): Electron.Rectangle {
   const area = screen.getPrimaryDisplay().workArea
@@ -1793,9 +1845,11 @@ function createDropPad(): void {
       sandbox: false
     }
   })
+  initLeftButtonProbe()
   padWin = pad
   padInteractive = false
   padDragging = false
+  padDraggingAt = 0
   padSuspended = false
   pad.setIgnoreMouseEvents(true)
   pad.on('closed', () => {
@@ -1826,6 +1880,10 @@ function createDropPad(): void {
   padPoller = setInterval(() => {
     const target = padWin
     if (!target || target.isDestroyed()) return
+    const now = Date.now()
+    // 拖拽过程中渲染层会持续续期，长时间没消息就当拖拽已结束
+    if (padDragging && now - padDraggingAt > 900) padDragging = false
+
     const point = screen.getCursorScreenPoint()
     const box = target.getBounds()
     const inside =
@@ -1833,24 +1891,34 @@ function createDropPad(): void {
       point.x < box.x + box.width &&
       point.y >= box.y &&
       point.y < box.y + box.height
-    if (!inside) {
-      if (padInteractive) {
-        padInteractive = false
-        padSuspended = false
-        target.setIgnoreMouseEvents(true)
-      }
-      return
-    }
-    if (!padInteractive) {
-      padInteractive = true
-      padHoverAt = Date.now()
-      target.setIgnoreMouseEvents(false)
-    } else if (!padDragging && !padSuspended && Date.now() - padHoverAt > 400) {
-      // 只是路过：没在拖东西就恢复点击穿透，别挡住右上角窗口的按钮。
+
+    let interactive: boolean
+    if (leftButtonDown) {
+      // 只有按住左键（拖动中）或拖拽已被确认时才接手鼠标，普通移动和单击一律穿透
+      interactive = inside && (leftButtonDown() || padDragging)
+      padSuspended = false
+    } else if (!inside) {
+      padSuspended = false
+      interactive = false
+    } else if (padDragging) {
+      interactive = true
+    } else if (padSuspended) {
+      interactive = false
+    } else if (!padInteractive) {
+      padHoverAt = now
+      interactive = true
+    } else if (now - padHoverAt > 400) {
+      // 拿不到按键状态的平台退回旧行为：悬停 400ms 后恢复穿透
       padSuspended = true
-      target.setIgnoreMouseEvents(true)
+      interactive = false
+    } else {
+      interactive = true
     }
-  }, 90)
+
+    if (interactive === padInteractive) return
+    padInteractive = interactive
+    target.setIgnoreMouseEvents(!interactive)
+  }, 45)
 }
 
 function activeIncoming(snapshot: Snapshot): Message[] {
@@ -2614,6 +2682,50 @@ async function restartService(): Promise<void> {
   }
 }
 
+let logWin: BrowserWindow | null = null
+
+// 设置里的「运行日志」入口：独立窗口，复用同一个渲染页，只是换成 #logs。
+function openLogWindow(): void {
+  if (logWin && !logWin.isDestroyed()) {
+    if (logWin.isMinimized()) logWin.restore()
+    logWin.show()
+    logWin.focus()
+    return
+  }
+  const target = new BrowserWindow({
+    width: 920,
+    height: 640,
+    minWidth: 520,
+    minHeight: 360,
+    frame: false,
+    title: '日志',
+    icon: assetPath('icon.png'),
+    backgroundColor: '#141218',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  logWin = target
+  target.on('closed', () => {
+    if (logWin === target) logWin = null
+  })
+  const devUrl = process.env['ELECTRON_RENDERER_URL']?.replace('localhost', '127.0.0.1')
+  const load = (): void => {
+    if (target.isDestroyed()) return
+    if (devUrl) {
+      void target.loadURL(`${devUrl}#logs`).catch(() => setTimeout(load, 300))
+    } else {
+      void target
+        .loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'logs' })
+        .catch(() => {})
+    }
+  }
+  load()
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1120,
@@ -2747,8 +2859,158 @@ async function loadRenderer(): Promise<void> {
   }
 }
 
+async function runPull(
+  serial: string,
+  paths: string[],
+  target: string,
+  sender: Electron.WebContents
+): Promise<number> {
+  fs.mkdirSync(target, { recursive: true })
+  const record: AdbDownloadRecord = {
+    id: randomUUID(),
+    time: Date.now(),
+    dir: target,
+    names: paths.map((raw) => path.posix.basename(raw.replace(/\/+$/, '')) || 'root'),
+    total: 0,
+    bytes: 0,
+    status: 'running'
+  }
+  downloads.start(record)
+  const controller = new AbortController()
+  pullJobs.set(record.id, controller)
+  let last = record
+  try {
+    const count = await adb.pull(
+      serial,
+      paths,
+      target,
+      (progress) => {
+        if (!sender.isDestroyed()) sender.send('adb:pull-progress', progress)
+        if (!progress.running) {
+          last = { ...record, total: progress.total, bytes: progress.totalBytes }
+        }
+      },
+      controller.signal
+    )
+    downloads.finish(record.id, { status: 'done', total: last.total, bytes: last.bytes })
+    return count
+  } catch (error) {
+    if (controller.signal.aborted) {
+      downloads.finish(record.id, { status: 'canceled' })
+      return 0
+    }
+    const reason = error instanceof Error ? error.message : String(error)
+    downloads.finish(record.id, { status: 'failed', error: reason })
+    throw error
+  } finally {
+    pullJobs.delete(record.id)
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('state:get', () => state.snapshot())
+
+  ipcMain.handle('logs:open', () => openLogWindow())
+
+  ipcMain.handle('logs:read', () => ({ path: appLog.file, lines: appLog.readTail() }))
+
+  ipcMain.handle('adb:status', () => adb.status())
+
+  ipcMain.handle('adb:download', (event) =>
+    adb.download((received, total) => {
+      if (!event.sender.isDestroyed()) event.sender.send('adb:progress', received, total)
+    })
+  )
+
+  ipcMain.handle('adb:devices', () => adb.devices())
+
+  ipcMain.handle('adb:list', (_event, serial: string, dir: string) => adb.list(serial, dir))
+
+  ipcMain.handle('adb:pull', (event, serial: string, paths: string[]) =>
+    // 直接下到设置里的接收目录，不再每次弹框选位置。
+    runPull(serial, paths, settings.recvDir || RECV_DIR, event.sender)
+  )
+
+  // 接收目录里已经有的文件才交给系统拖拽（秒拖）；没下过的返回空字符串，
+  // 渲染进程改走「松手后再下载」，避免按下拖动时为了等下载而卡住。
+  ipcMain.on('adb:drag-prepared', (event, remotePath: string, size: number) => {
+    const target = settings.recvDir || RECV_DIR
+    const name = path.posix.basename((remotePath ?? '').replace(/\/+$/, '')) || 'root'
+    const local = path.join(target, name)
+    try {
+      const stat = fs.statSync(local)
+      if (stat.isFile() && size > 0 && stat.size !== size) {
+        event.returnValue = ''
+        return
+      }
+      event.returnValue = local
+    } catch {
+      event.returnValue = ''
+    }
+  })
+
+  // 拖出已下载好的文件：直接交给系统拖拽，复制到用户放下的文件夹。
+  ipcMain.handle('adb:drag-out', (event, _serial: string, paths: string[]) => {
+    const target = settings.recvDir || RECV_DIR
+    const name = path.posix.basename((paths[0] ?? '').replace(/\/+$/, '')) || 'root'
+    const local = path.join(target, name)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || !fs.existsSync(local)) return 0
+    window.webContents.startDrag({
+      file: local,
+      icon: nativeImage.createFromPath(assetPath('icon.png'))
+    })
+    // 拖拽结束后通知渲染进程恢复正常的拖放接收。
+    if (!event.sender.isDestroyed()) event.sender.send('adb:drag-end')
+    return 1
+  })
+
+  ipcMain.handle('adb:pull-history', () => downloads.list())
+
+  ipcMain.handle('adb:openRecvDir', async () => {
+    const dir = settings.recvDir || RECV_DIR
+    fs.mkdirSync(dir, { recursive: true })
+    await shell.openPath(dir)
+  })
+
+  ipcMain.handle('adb:pull-cancel', (_event, id: string) => {
+    pullJobs.get(id)?.abort()
+  })
+
+  ipcMain.handle('adb:pull-delete', (_event, id: string) => {
+    pullJobs.get(id)?.abort()
+    downloads.remove(id)
+  })
+
+  ipcMain.handle('adb:push', async (event, serial: string, dir: string) => {
+    const parent = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { properties: ['openFile', 'multiSelections'] }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return 0
+    return adb.push(serial, result.filePaths, dir, (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('adb:push-progress', progress)
+    })
+  })
+
+  ipcMain.handle('adb:push-paths', (event, serial: string, paths: string[], dir: string) =>
+    adb.push(serial, paths, dir, (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('adb:push-progress', progress)
+    })
+  )
+
+  ipcMain.handle('adb:rename', (_event, serial: string, remote: string, name: string) =>
+    adb.rename(serial, remote, name)
+  )
+
+  ipcMain.handle('adb:remove', (_event, serial: string, paths: string[]) =>
+    adb.remove(serial, paths)
+  )
+
+  ipcMain.handle('adb:mkdir', (_event, serial: string, dir: string, name: string) =>
+    adb.mkdir(serial, dir, name)
+  )
 
   ipcMain.handle('service:restart', () => restartService())
 
@@ -3231,13 +3493,12 @@ function registerIpc(): void {
 
   ipcMain.on('pad:drag', (_event, active: boolean) => {
     padDragging = active === true
-    if (padDragging) {
-      padSuspended = false
-      padHoverAt = Date.now()
-      if (padWin && !padWin.isDestroyed() && !padInteractive) {
-        padInteractive = true
-        padWin.setIgnoreMouseEvents(false)
-      }
+    if (!padDragging) return
+    padDraggingAt = Date.now()
+    padSuspended = false
+    if (padWin && !padWin.isDestroyed() && !padInteractive) {
+      padInteractive = true
+      padWin.setIgnoreMouseEvents(false)
     }
   })
 
@@ -3761,6 +4022,7 @@ if (!locked) {
   })
 
   app.whenReady().then(async () => {
+    console.log(`应用启动 v${app.getVersion()} ${process.platform}-${process.arch}`)
     // 旧版自启项没带 --hidden，启动时补写一次，用户不必手动开关一遍。
     const login = app.getLoginItemSettings()
     if (login.openAtLogin) {

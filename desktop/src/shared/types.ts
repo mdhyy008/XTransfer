@@ -206,6 +206,7 @@ export type Settings = {
   quickPreview: boolean
   enterToSend: boolean
   autoAcceptAll: boolean
+  hideOffline: boolean
   misans: boolean
   bleEnabled: boolean
   webChat: boolean
@@ -277,6 +278,49 @@ export type FileEntry = {
   mtime?: number
 }
 
+export type AdbStatus = {
+  installed: boolean
+  path: string
+  version?: string
+}
+
+export type AdbDevice = {
+  serial: string
+  state: string
+  model?: string
+}
+
+export type PhoneEntry = {
+  name: string
+  path: string
+  kind: 'file' | 'folder'
+  size: number
+}
+
+export type AdbDownloadRecord = {
+  id: string
+  time: number
+  dir: string
+  names: string[]
+  total: number
+  bytes: number
+  status: 'running' | 'done' | 'failed' | 'canceled'
+  error?: string
+}
+
+export type AdbPullProgress = {
+  running: boolean
+  done: number
+  total: number
+  name: string
+  received: number
+  size: number
+  doneBytes: number
+  totalBytes: number
+}
+
+export type AdbPushProgress = AdbPullProgress
+
 export type SendFilesReq = {
   to: string
   paths: string[]
@@ -311,6 +355,29 @@ export type ShareStatus = {
 
 export type XtApi = {
   getState: () => Promise<Snapshot>
+  openLogWindow: () => Promise<void>
+  readLogs: () => Promise<{ path: string; lines: string[] }>
+  adbStatus: () => Promise<AdbStatus>
+  adbDownload: () => Promise<AdbStatus>
+  onAdbProgress: (cb: (received: number, total: number) => void) => () => void
+  adbDevices: () => Promise<AdbDevice[]>
+  adbList: (serial: string, dir: string) => Promise<PhoneEntry[]>
+  adbPull: (serial: string, paths: string[]) => Promise<number>
+  adbPullHistory: () => Promise<AdbDownloadRecord[]>
+  adbPullCancel: (id: string) => Promise<void>
+  adbPullDelete: (id: string) => Promise<void>
+  adbOpenRecvDir: () => Promise<void>
+  onAdbPullProgress: (cb: (progress: AdbPullProgress) => void) => () => void
+  adbPush: (serial: string, dir: string) => Promise<number>
+  adbPushPaths: (serial: string, paths: string[], dir: string) => Promise<number>
+  adbDragOut: (serial: string, paths: string[]) => Promise<number>
+  adbDragPrepared: (path: string, size: number) => string
+  onAdbPushProgress: (cb: (progress: AdbPushProgress) => void) => () => void
+  onAdbDragEnd: (cb: () => void) => () => void
+  filePath: (file: unknown) => string
+  adbRename: (serial: string, path: string, name: string) => Promise<string>
+  adbRemove: (serial: string, paths: string[]) => Promise<void>
+  adbMkdir: (serial: string, dir: string, name: string) => Promise<string>
   onState: (cb: (s: Snapshot) => void) => () => void
   onMessages: (cb: (messages: Message[]) => void) => () => void
   scan: () => Promise<Snapshot>

@@ -2,6 +2,7 @@ import { execFile, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { Readable } from 'node:stream'
 import type { DeviceInfo } from '../shared/types'
 import { request, type Endpoint } from './localApi'
 
@@ -25,7 +26,8 @@ export class XlanService {
 
   constructor(
     private readonly dir: string,
-    recvDir: string
+    recvDir: string,
+    private readonly onLog?: (source: string, line: string) => void
   ) {
     this.recvDir = recvDir
   }
@@ -136,11 +138,32 @@ export class XlanService {
     const existing = await this.probe()
     if (existing) return existing
 
-    spawn(this.exe, ['serve', '-d', ...(this.autoAccept ? ['--auto-accept'] : [])], {
-      cwd: this.dir,
-      windowsHide: true,
-      stdio: 'ignore'
-    }).unref()
+    const child = spawn(
+      this.exe,
+      ['serve', '-d', ...(this.autoAccept ? ['--auto-accept'] : [])],
+      {
+        cwd: this.dir,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    )
+    // 服务的输出逐行进日志，出现问题时设置里的日志窗口能看到具体原因。
+    const forward = (stream: Readable | null, source: string): void => {
+      if (!stream) return
+      let buffer = ''
+      stream.setEncoding('utf8')
+      stream.on('data', (chunk: string) => {
+        buffer += chunk
+        const parts = buffer.split(/\r?\n/)
+        buffer = parts.pop() ?? ''
+        for (const line of parts) {
+          if (line.trim() !== '') this.onLog?.(source, line)
+        }
+      })
+    }
+    forward(child.stdout, 'xlan.out')
+    forward(child.stderr, 'xlan.err')
+    child.unref()
 
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {

@@ -30,6 +30,7 @@ export class AppState {
     quickPreview: true,
     enterToSend: true,
     autoAcceptAll: false,
+    hideOffline: true,
     misans: true,
     bleEnabled: false,
     webChat: false,

@@ -27,6 +27,8 @@ import AppNav, { type AppPage } from './components/AppNav'
 import BucketDrawer from './components/BucketDrawer'
 import ChatPane from './components/ChatPane'
 import FileManager from './components/FileManager'
+import MiniApps from './components/MiniApps'
+import PhoneFiles from './components/PhoneFiles'
 import HotspotDialog from './components/HotspotDialog'
 import BluetoothDialog from './components/BluetoothDialog'
 import ConnectionsDialog from './components/ConnectionsDialog'
@@ -54,6 +56,7 @@ function Shell() {
   const [scanning, setScanning] = useState(false)
   const [bucket, setBucket] = useState<FileEntry[]>([])
   const [page, setPage] = useState<AppPage>('chat')
+  const [miniApp, setMiniApp] = useState<'phone' | null>(null)
   const [autoStartShare, setAutoStartShare] = useState(false)
   const [openingFile, setOpeningFile] = useState(false)
   const openToken = useRef(0)
@@ -914,6 +917,12 @@ function Shell() {
             onOpen={handleOpenBucketEntry}
             notify={notify}
           />
+        ) : page === 'apps' ? (
+          miniApp === 'phone' ? (
+            <PhoneFiles notify={notify} onBack={() => setMiniApp(null)} />
+          ) : (
+            <MiniApps onOpenPhone={() => setMiniApp('phone')} />
+          )
         ) : (
           <SharePage
             bucket={bucket}

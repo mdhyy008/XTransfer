@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -88,6 +90,8 @@ const val DEFAULT_RECV_FOLDER = "X互传"
 
 // 入站传输多久没有任何字节进来就判定对方已经退出/取消。
 private const val INBOUND_IDLE_MS = 5_000L
+
+private const val EVENTS_TAG = "XlanEvents"
 
 private const val SPEEDTEST_CHUNK = 4L * 1024 * 1024
 private const val SPEEDTEST_SIZE = SPEEDTEST_CHUNK * 2
@@ -246,6 +250,8 @@ class Repository(
     private var eventJob: Job? = null
     private var pollJob: Job? = null
     private var lastItemTs = 0L
+    // 事件流补拉、周期兜底、手动刷新可能同时拉收件箱，串行化避免同一条消息重复插入。
+    private val inboxMutex = Mutex()
     private var healthFailures = 0
     private var lastRecoveryAt = 0L
     private val progressSamples = ConcurrentHashMap<String, Pair<Long, Long>>()
@@ -341,6 +347,7 @@ class Repository(
     // ---------- 服务生命周期 ----------
 
     fun onServiceStarted(base: String) {
+        AppLog.i("service", "服务已就绪 $base")
         val cert = File(app.filesDir, "tls.crt")
         api = LocalApi(base, cert)
         presenceEpoch = now()
@@ -360,10 +367,12 @@ class Repository(
     }
 
     fun onServiceRestarting() {
+        AppLog.i("service", "正在重启服务")
         _restarting.value = true
     }
 
     fun onServiceStopped(error: String? = null) {
+        AppLog.w("service", if (error.isNullOrBlank()) "服务已停止" else "服务已停止：$error")
         eventJob?.cancel()
         eventJob = null
         pollJob?.cancel()
@@ -387,6 +396,11 @@ class Repository(
                 runCatching { reapStuckInbound() }
                 // 设备列表不用每秒刷，五秒一次就够。
                 if (++tick % 5 == 0) checkServiceHealth()
+                // 兜底：事件流万一静默失效，也能在十几秒内把新消息追平。
+                if (tick % 15 == 0) {
+                    runCatching { refreshInbox(if (lastItemTs > 0) lastItemTs - 5 else 0) }
+                        .onFailure { AppLog.w(EVENTS_TAG, "周期补拉消息失败", it) }
+                }
             }
         }
     }
@@ -449,7 +463,6 @@ class Repository(
     }
 
     private suspend fun eventLoop() {
-        var reconnected = false
         while (scope.isActive) {
             val current = api ?: return
             try {
@@ -457,21 +470,30 @@ class Repository(
                     .execute().use { resp ->
                         if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                         val source = resp.body?.source() ?: throw IOException("事件流为空")
-                        if (reconnected) {
-                            runCatching { refreshPeers() }
-                            runCatching { refreshInbox(if (lastItemTs > 0) lastItemTs - 5 else 0) }
-                        }
-                        reconnected = true
+                        AppLog.i(EVENTS_TAG, "事件流已建立，先补拉断线期间的消息")
+                        // SSE 只推增量，断线期间的事件服务端不会补发，所以每次建连
+                        // 之后都先增量补一次，不能只依赖第一次或上次成功过的标记。
+                        runCatching { refreshPeers() }
+                            .onFailure { AppLog.w(EVENTS_TAG, "补拉设备列表失败", it) }
+                        runCatching { refreshInbox(if (lastItemTs > 0) lastItemTs - 5 else 0) }
+                            .onFailure { AppLog.w(EVENTS_TAG, "补拉消息失败", it) }
+                        var received = 0
                         while (true) {
                             val line = source.readUtf8Line() ?: break
                             if (!line.startsWith("data: ")) continue
+                            received += 1
+                            // 心跳等空转事件不落日志，只记 handleEvent 里的业务事件，
+                            // 否则界面每几秒被刷一行，和桌面端的日志口径对不上。
                             runCatching { handleEvent(JSONObject(line.substring(6))) }
+                                .onFailure { AppLog.w(EVENTS_TAG, "事件处理失败", it) }
                         }
+                        AppLog.w(EVENTS_TAG, "事件流结束，本轮共 $received 条")
                     }
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
-                // 服务重启或网络抖动，稍后重连
+            } catch (error: Exception) {
+                // 服务重启、网络抖动或读超时（僵死连接），稍后重连
+                AppLog.w(EVENTS_TAG, "事件流中断，稍后重连", error)
             }
             if (scope.isActive) delay(1000)
         }
@@ -511,19 +533,21 @@ class Repository(
     }
 
     suspend fun refreshInbox(since: Long = 0) {
-        val current = api ?: return
-        val suffix = if (since > 0) "&since=$since" else ""
-        val json = withContext(Dispatchers.IO) { current.get("/v1/inbox?limit=500$suffix") }
-        val items = json.optJSONArray("items") ?: JSONArray()
-        for (i in 0 until items.length()) {
-            val item = items.getJSONObject(i)
-            if (isSpeedtestName(item.optString("name"))) {
-                if (isSpeedtestTerminal(item.optString("status"))) {
-                    dropSpeedtest(item.optString("id"))
+        inboxMutex.withLock {
+            val current = api ?: return
+            val suffix = if (since > 0) "&since=$since" else ""
+            val json = withContext(Dispatchers.IO) { current.get("/v1/inbox?limit=500$suffix") }
+            val items = json.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until items.length()) {
+                val item = items.getJSONObject(i)
+                if (isSpeedtestName(item.optString("name"))) {
+                    if (isSpeedtestTerminal(item.optString("status"))) {
+                        dropSpeedtest(item.optString("id"))
+                    }
+                    continue
                 }
-                continue
+                ingestItem(item)
             }
-            ingestItem(item)
         }
     }
 
@@ -559,6 +583,11 @@ class Repository(
                 }
                 ingestItem(item)
                 notifyInbound(item)
+                AppLog.i(
+                    "item",
+                    "新消息 kind=${item.optString("kind")} name=${item.optString("name")} " +
+                        "from=${item.optString("from_name").ifBlank { item.optString("from_id") }}"
+                )
             }
             "item.update" -> {
                 val data = event.optJSONObject("data") ?: return
@@ -599,6 +628,12 @@ class Repository(
                     now = now()
                 )
                 if (status != null && status != "pending") Notifications.cancelOffer(app, id)
+                if (status != null && status != existing?.status) {
+                    AppLog.i(
+                        "item",
+                        "${existing?.fileName ?: id} ${existing?.status ?: "未知"} -> $status"
+                    )
+                }
                 if (status == "active") {
                     inboundSeen[id] = System.currentTimeMillis()
                 } else if (status != null) {

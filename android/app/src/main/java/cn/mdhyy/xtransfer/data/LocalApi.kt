@@ -57,7 +57,9 @@ class LocalApi(base: String, certFile: File?) {
                 .hostnameVerifier { _, _ -> true }
         }
         http = builder.build()
-        stream = http.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+        // 服务端每 20 秒发一次心跳，这里给 45 秒读超时：连接僵死（切网、省电冻结
+        // 导致的半死 socket）时能在 45 秒内抛错重连，否则会一直阻塞在读取上静默丢事件。
+        stream = http.newBuilder().readTimeout(45, TimeUnit.SECONDS).build()
     }
 
     fun get(path: String): JSONObject = execute(Request.Builder().url(base + path).get().build())

@@ -107,3 +107,55 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
 !macroend
+
+; 目录页：用户重新选了目录后，自动补一层「软件名」子目录并回显到路径框里，
+; 安装文件落在子目录中而不是散在用户选的目录里。
+; NSIS 在目录变化（含浏览选完目录）时回调 .onVerifyInstDir，此刻页面还在，可以改路径框。
+!ifndef BUILD_UNINSTALLER
+  Function .onVerifyInstDir
+    ; 只处理目录选择页：该页有「所需空间」提示控件。
+    FindWindow $R9 "#32770" "" $HWNDPARENT
+    ${If} $R9 == 0
+      Return
+    ${EndIf}
+    GetDlgItem $R8 $R9 1023
+    ${If} $R8 == 0
+      Return
+    ${EndIf}
+    GetDlgItem $R7 $R9 1019
+    ${If} $R7 == 0
+      Return
+    ${EndIf}
+    ; 用户正在路径框里打字时不插手，只在焦点离开（比如浏览选完目录回来）后补。
+    System::Call 'user32::GetFocus() p .R0'
+    ${If} $R0 == $R7
+      Return
+    ${EndIf}
+    System::Call 'user32::GetWindowTextW(p r7, w .R1, i ${NSIS_MAX_STRLEN})'
+    ${If} $R1 == ""
+      Return
+    ${EndIf}
+    ; 去掉结尾反斜杠再判断，避免拼出双斜杠。
+    StrCpy $R3 $R1 1 -1
+    ${If} $R3 == "\"
+      StrCpy $R1 $R1 -1
+    ${EndIf}
+    ${If} $R1 == ""
+      Return
+    ${EndIf}
+    ; 路径已经以软件名结尾就不用再补。
+    StrLen $R4 "\${APP_FILENAME}"
+    StrLen $R5 $R1
+    ${If} $R5 >= $R4
+      IntOp $R6 $R5 - $R4
+      StrCpy $R3 $R1 "" $R6
+      ${If} $R3 == "\${APP_FILENAME}"
+        StrCpy $INSTDIR $R1
+        Return
+      ${EndIf}
+    ${EndIf}
+    StrCpy $R2 "$R1\${APP_FILENAME}"
+    StrCpy $INSTDIR $R2
+    System::Call 'user32::SetWindowTextW(p r7, w r2)'
+  FunctionEnd
+!endif

@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
+  AdbDevice,
+  AdbDownloadRecord,
+  AdbPullProgress,
+  AdbPushProgress,
+  AdbStatus,
   BleState,
   DecisionReq,
   DoctorResult,
@@ -7,6 +12,7 @@ import type {
   HotspotStatus,
   LanInfo,
   Message,
+  PhoneEntry,
   RetryFileReq,
   SendFilesReq,
   SendTextReq,
@@ -32,6 +38,58 @@ const api: XtApi = {
     return () => ipcRenderer.removeListener('messages', handler)
   },
   scan: () => ipcRenderer.invoke('xlan:scan') as Promise<Snapshot>,
+  openLogWindow: () => ipcRenderer.invoke('logs:open') as Promise<void>,
+  readLogs: () =>
+    ipcRenderer.invoke('logs:read') as Promise<{ path: string; lines: string[] }>,
+  adbStatus: () => ipcRenderer.invoke('adb:status') as Promise<AdbStatus>,
+  adbDownload: () => ipcRenderer.invoke('adb:download') as Promise<AdbStatus>,
+  onAdbProgress: (cb) => {
+    const handler = (_event: Electron.IpcRendererEvent, received: number, total: number): void =>
+      cb(received, total)
+    ipcRenderer.on('adb:progress', handler)
+    return () => ipcRenderer.removeListener('adb:progress', handler)
+  },
+  adbDevices: () => ipcRenderer.invoke('adb:devices') as Promise<AdbDevice[]>,
+  adbList: (serial: string, dir: string) =>
+    ipcRenderer.invoke('adb:list', serial, dir) as Promise<PhoneEntry[]>,
+  adbPull: (serial: string, paths: string[]) =>
+    ipcRenderer.invoke('adb:pull', serial, paths) as Promise<number>,
+  adbPullHistory: () => ipcRenderer.invoke('adb:pull-history') as Promise<AdbDownloadRecord[]>,
+  adbPullCancel: (id: string) => ipcRenderer.invoke('adb:pull-cancel', id) as Promise<void>,
+  adbPullDelete: (id: string) => ipcRenderer.invoke('adb:pull-delete', id) as Promise<void>,
+  adbOpenRecvDir: () => ipcRenderer.invoke('adb:openRecvDir') as Promise<void>,
+  onAdbPullProgress: (cb) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: AdbPullProgress): void =>
+      cb(progress)
+    ipcRenderer.on('adb:pull-progress', handler)
+    return () => ipcRenderer.removeListener('adb:pull-progress', handler)
+  },
+  adbPush: (serial: string, dir: string) =>
+    ipcRenderer.invoke('adb:push', serial, dir) as Promise<number>,
+  adbPushPaths: (serial: string, paths: string[], dir: string) =>
+    ipcRenderer.invoke('adb:push-paths', serial, paths, dir) as Promise<number>,
+  adbDragOut: (serial: string, paths: string[]) =>
+    ipcRenderer.invoke('adb:drag-out', serial, paths) as Promise<number>,
+  adbDragPrepared: (path: string, size: number) =>
+    ipcRenderer.sendSync('adb:drag-prepared', path, size) as string,
+  onAdbPushProgress: (cb) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: AdbPushProgress): void =>
+      cb(progress)
+    ipcRenderer.on('adb:push-progress', handler)
+    return () => ipcRenderer.removeListener('adb:push-progress', handler)
+  },
+  onAdbDragEnd: (cb) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('adb:drag-end', handler)
+    return () => ipcRenderer.removeListener('adb:drag-end', handler)
+  },
+  filePath: (file: unknown) => webUtils.getPathForFile(file as File),
+  adbRename: (serial: string, path: string, name: string) =>
+    ipcRenderer.invoke('adb:rename', serial, path, name) as Promise<string>,
+  adbRemove: (serial: string, paths: string[]) =>
+    ipcRenderer.invoke('adb:remove', serial, paths) as Promise<void>,
+  adbMkdir: (serial: string, dir: string, name: string) =>
+    ipcRenderer.invoke('adb:mkdir', serial, dir, name) as Promise<string>,
   sendText: (req: SendTextReq) => ipcRenderer.invoke('text:send', req),
   retryText: (id: string) => ipcRenderer.invoke('text:retry', id) as Promise<void>,
   decide: (req: DecisionReq) => ipcRenderer.invoke('offer:decision', req) as Promise<void>,

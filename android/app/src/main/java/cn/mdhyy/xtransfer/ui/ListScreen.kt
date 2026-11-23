@@ -174,6 +174,7 @@ fun ListScreen(
     aliases: Map<String, String>,
     muted: Set<String>,
     pinned: Set<String>,
+    hideOffline: Boolean,
     peakSpeeds: Map<String, Long>,
     testedPeaks: Map<String, Long>,
     lanOffline: Boolean,
@@ -317,7 +318,9 @@ fun ListScreen(
     val devices = conversations.filter {
         it.id != PUBLIC_CONVERSATION_ID &&
             !it.id.startsWith(BLE_CONVERSATION_PREFIX) &&
-            !it.id.startsWith(RELAY_CONVERSATION_PREFIX)
+            !it.id.startsWith(RELAY_CONVERSATION_PREFIX) &&
+            // 隐藏离线设备只作用于局域网设备行，公网房间与蓝牙另有判断。
+            (!hideOffline || it.online || it.unknown)
     }
     val relayRows = remember(conversations, relayState.rooms) {
         val order = relayState.rooms

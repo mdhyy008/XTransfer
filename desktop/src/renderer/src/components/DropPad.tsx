@@ -70,6 +70,7 @@ export default function DropPad() {
   const depth = useRef(0)
   const leaveTimer = useRef<number | undefined>(undefined)
   const busy = useRef(false)
+  const dragPingAt = useRef(0)
 
   useEffect(() => {
     document.documentElement.style.background = 'transparent'
@@ -79,8 +80,17 @@ export default function DropPad() {
     }
   }, [])
 
+  // 主进程靠这个信号判断拖拽还在继续，拖到一半停住不动时也不会提前收起
+  const pingDrag = (): void => {
+    const now = Date.now()
+    if (now - dragPingAt.current < 200) return
+    dragPingAt.current = now
+    window.xt.padDrag(true)
+  }
+
   const hide = (): void => {
     depth.current = 0
+    dragPingAt.current = 0
     setZone(null)
     setActive(false)
     window.xt.padDrag(false)
@@ -96,6 +106,7 @@ export default function DropPad() {
     depth.current += 1
     if (depth.current === 1) {
       setActive(true)
+      dragPingAt.current = Date.now()
       window.xt.padDrag(true)
     }
   }
@@ -118,8 +129,8 @@ export default function DropPad() {
     if (depth.current === 0) {
       depth.current = 1
       setActive(true)
-      window.xt.padDrag(true)
     }
+    pingDrag()
   }
 
   const onDropZone = (kind: ZoneKind, event: DragEvent<HTMLDivElement>): void => {

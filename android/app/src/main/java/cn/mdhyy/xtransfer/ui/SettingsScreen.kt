@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Feedback
@@ -62,6 +63,7 @@ import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -138,7 +140,8 @@ fun SettingsScreen(
     deviceCount: Int,
     onBack: () -> Unit,
     onOpenAbout: () -> Unit,
-    onOpenTheme: () -> Unit
+    onOpenTheme: () -> Unit,
+    onOpenLogs: () -> Unit
 ) {
     val context = LocalContext.current
     val appVersion = remember {
@@ -605,6 +608,18 @@ fun SettingsScreen(
                             )
                         }
                     )
+                    SettingDivider()
+                    SettingRow(
+                        icon = Icons.Rounded.VisibilityOff,
+                        title = "隐藏离线设备",
+                        singleRow = true,
+                        trailing = {
+                            SettingSwitch(
+                                checked = settings.hideOffline,
+                                onCheckedChange = { store.update(hideOffline = it) }
+                            )
+                        }
+                    )
                 }
             }
 
@@ -758,6 +773,18 @@ fun SettingsScreen(
                         }
                     )
                     SettingDivider()
+                    SettingRow(
+                        icon = Icons.Rounded.Description,
+                        title = "运行日志",
+                        showChevron = true,
+                        onClick = onOpenLogs
+                    )
+                }
+            }
+
+            item { SectionTitle("关于") }
+            item {
+                SettingsGroup {
                     SettingRow(
                         icon = Icons.Rounded.Feedback,
                         title = "建议与反馈",
