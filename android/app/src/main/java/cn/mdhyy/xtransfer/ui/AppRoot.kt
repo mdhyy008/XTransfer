@@ -18,11 +18,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
@@ -30,8 +34,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -84,6 +86,7 @@ import cn.mdhyy.xtransfer.data.BucketItem
 import cn.mdhyy.xtransfer.data.HotspotState
 import cn.mdhyy.xtransfer.data.MessageEntity
 import cn.mdhyy.xtransfer.data.PUBLIC_CONVERSATION_ID
+import cn.mdhyy.xtransfer.data.Peer
 import cn.mdhyy.xtransfer.data.RELAY_CONVERSATION_PREFIX
 import cn.mdhyy.xtransfer.data.Repository
 import cn.mdhyy.xtransfer.service.XlanService
@@ -107,6 +110,7 @@ data class ShareNotice(
     val items: List<BucketItem>
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AppRoot(
     repo: Repository,
@@ -618,9 +622,17 @@ fun AppRoot(
     val notice = shareNotice
     if (notice != null) {
         val selfId = info?.id
-        val targets = peers.filter {
-            it.id != selfId && it.addr != null && repo.isPeerOnline(it)
+        // peers 会被服务端返回顺序整体覆盖，这里按显示名排一次，置顶的排前面，避免列表来回跳。
+        val label = { peer: Peer ->
+            settings.aliases[peer.id]?.takeIf { it.isNotBlank() } ?: peer.name
         }
+        val targets = peers
+            .filter { it.id != selfId && it.addr != null && repo.isPeerOnline(it) }
+            .sortedWith(
+                compareByDescending<Peer> { it.id in settings.pinned }
+                    .thenBy { label(it).lowercase() }
+                    .thenBy { it.id }
+            )
         var sendingTo by remember(notice) { mutableStateOf<String?>(null) }
         // 刚进应用时设备发现还没回来，先转圈；等一会儿仍没有可发送的设备就把转圈收掉。
         var probing by remember(notice) { mutableStateOf(true) }
@@ -665,7 +677,8 @@ fun AppRoot(
                     }
                     Spacer(Modifier.height(18.dp))
                     Text(
-                        text = parts.joinToString("，"),
+                        text = parts.joinToString("，") +
+                            if (targets.isNotEmpty()) "，发送到：" else "",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
@@ -685,21 +698,21 @@ fun AppRoot(
                             )
                         }
                     } else if (targets.isNotEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .width(240.dp)
-                                .heightIn(min = 76.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier = Modifier.width(240.dp)
+                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                            // 名字长就一卡一行，名字短就两卡一行；只有一个设备时直接占满。
+                            val onePerRow = targets.size == 1 ||
+                                targets.take(2).any { label(it).length > 12 }
+                            val cardWidth = if (onePerRow) maxWidth else (maxWidth - 8.dp) / 2
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                items(targets, key = { it.id }) { peer ->
+                                targets.forEach { peer ->
                                     Column(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         modifier = Modifier
-                                            .width(72.dp)
+                                            .width(cardWidth)
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                                             .clickable(enabled = sendingTo == null) {
@@ -719,7 +732,7 @@ fun AppRoot(
                                                     }
                                                 }
                                             }
-                                            .padding(horizontal = 4.dp, vertical = 8.dp)
+                                            .padding(horizontal = 8.dp, vertical = 10.dp)
                                     ) {
                                         Box {
                                             AvatarIcon(
@@ -745,10 +758,10 @@ fun AppRoot(
                                         }
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            text = peer.name,
+                                            text = label(peer),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
+                                            maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
                                             textAlign = TextAlign.Center
                                         )

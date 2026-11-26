@@ -133,15 +133,6 @@ fun BucketSheet(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
-                if (items.isNotEmpty()) {
-                    IconButton(onClick = { confirmClear = true }) {
-                        Icon(
-                            Icons.Rounded.Delete,
-                            contentDescription = "清空",
-                            modifier = Modifier.size(BUCKET_ICON_SIZE)
-                        )
-                    }
-                }
                 IconButton(onClick = onPaste) {
                     Icon(
                         Icons.Rounded.ContentPaste,
@@ -162,6 +153,15 @@ fun BucketSheet(
                         contentDescription = "添加文件夹",
                         modifier = Modifier.size(BUCKET_ICON_SIZE)
                     )
+                }
+                if (items.isNotEmpty()) {
+                    IconButton(onClick = { confirmClear = true }) {
+                        Icon(
+                            Icons.Rounded.Delete,
+                            contentDescription = "清空",
+                            modifier = Modifier.size(BUCKET_ICON_SIZE)
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(6.dp))
