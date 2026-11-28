@@ -210,6 +210,8 @@ export type Settings = {
   misans: boolean
   bleEnabled: boolean
   webChat: boolean
+  // 屏幕右上角的拖入区域（Beta），默认关闭。
+  dropPad: boolean
   relayUrl: string
   blocked: string[]
   aliases: Record<string, string>

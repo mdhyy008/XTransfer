@@ -1812,6 +1812,16 @@ function positionDropPad(): void {
   if (padWin && !padWin.isDestroyed()) padWin.setBounds(padBounds())
 }
 
+// 拖入区域只在主窗口可见、未最小化时存在：窗口缩到任务栏或收进托盘时一并收掉。
+function syncDropPad(): void {
+  const active = !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()
+  if (settings.value.dropPad && active) {
+    if (!padWin || padWin.isDestroyed()) createDropPad()
+  } else {
+    destroyDropPad()
+  }
+}
+
 function destroyDropPad(): void {
   if (padPoller) {
     clearInterval(padPoller)
@@ -2827,9 +2837,13 @@ function createWindow(): void {
     win = null
     destroyDropPad()
   })
+  win.on('show', syncDropPad)
+  win.on('restore', syncDropPad)
+  win.on('hide', syncDropPad)
+  win.on('minimize', syncDropPad)
 
   void loadRenderer()
-  createDropPad()
+  syncDropPad()
 }
 
 // 开发模式下 Electron 常常比 Vite 先起来，直接 loadURL 会 ERR_CONNECTION_REFUSED
@@ -3760,6 +3774,7 @@ function registerIpc(): void {
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'relayUrl')) {
       relay.setAddress(settings.value.relayUrl)
     }
+    if (patch?.dropPad !== undefined) syncDropPad()
     if (patch?.autoAcceptAll !== undefined && service.autoAccept !== settings.value.autoAcceptAll) {
       // core 只在启动时读这个开关，改完必须重启服务才生效。
       service.autoAccept = settings.value.autoAcceptAll

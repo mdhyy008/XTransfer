@@ -25,6 +25,7 @@ import CloseRounded from '@mui/icons-material/CloseRounded'
 import CodeRounded from '@mui/icons-material/CodeRounded'
 import DataUsageRounded from '@mui/icons-material/DataUsageRounded'
 import DescriptionRounded from '@mui/icons-material/DescriptionRounded'
+import DragIndicatorRounded from '@mui/icons-material/DragIndicatorRounded'
 import DevicesRounded from '@mui/icons-material/DevicesRounded'
 import FeedbackRounded from '@mui/icons-material/FeedbackRounded'
 import FolderOpenRounded from '@mui/icons-material/FolderOpenRounded'
@@ -148,11 +149,18 @@ function Row({
         <Typography variant="body1" noWrap>{title}</Typography>
         {description && (
           <Typography
-            variant="body2"
+            variant="caption"
+            component="div"
             color="text.secondary"
-            noWrap
             title={description}
-            sx={{ display: 'block' }}
+            sx={{
+              fontSize: 12,
+              lineHeight: 1.35,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden'
+            }}
           >
             {description}
           </Typography>
@@ -523,7 +531,7 @@ export default function SettingsDialog({
               <Row
                 icon={<BluetoothRounded fontSize="small" />}
                 title="蓝牙广播"
-                description={`蓝牙 ${snapshot?.bluetooth.version || '未知'}${snapshot?.bluetooth.address ? ` · MAC ${snapshot.bluetooth.address}` : ''}`}
+                description={`无局域网时通过蓝牙发现附近设备 · 蓝牙 ${snapshot?.bluetooth.version || '未知'}${snapshot?.bluetooth.address ? ` · MAC ${snapshot.bluetooth.address}` : ''}`}
                 trailing={
                   <ToggleSwitch
                     checked={snapshot?.bluetooth.on === true}
@@ -538,7 +546,7 @@ export default function SettingsDialog({
           <Row
             icon={<PublicRounded fontSize="small" />}
             title="中继服务器"
-            description={snapshot?.relay.connected ? '已连接' : '未连接'}
+            description={`不在同一局域网时通过中继收发消息 · ${snapshot?.relay.connected ? '已连接' : '未连接'}`}
             trailing={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                 <Button
@@ -577,6 +585,7 @@ export default function SettingsDialog({
           <Row
             icon={<PaletteRounded fontSize="small" />}
             title="主题模式"
+            description="跟随系统，或固定使用浅色 / 深色"
             trailing={
               <ToggleButtonGroup
                 size="small"
@@ -602,6 +611,7 @@ export default function SettingsDialog({
           <Row
             icon={<ColorLensRounded fontSize="small" />}
             title="主题色"
+            description="应用整体的配色方案"
             onClick={() => setThemeOpen(true)}
             trailing={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -616,6 +626,7 @@ export default function SettingsDialog({
           <Row
             icon={<FontDownloadRounded fontSize="small" />}
             title="MiSans 字体"
+            description="使用小米 MiSans 字体显示界面文字"
             trailing={
               <ToggleSwitch
                 checked={settings?.misans ?? true}
@@ -629,6 +640,7 @@ export default function SettingsDialog({
           <Row
             icon={<NotificationsRounded fontSize="small" />}
             title="系统通知"
+            description="收到文件或消息时在系统通知中心提醒"
             trailing={
               <ToggleSwitch
                 checked={settings?.notifications ?? true}
@@ -640,7 +652,7 @@ export default function SettingsDialog({
           <Row
             icon={<KeyboardReturnRounded fontSize="small" />}
             title="回车发送"
-            description="按回车键发送消息"
+            description="按回车发送消息，Ctrl + 回车换行"
             trailing={
               <ToggleSwitch
                 checked={settings?.enterToSend ?? true}
@@ -652,7 +664,7 @@ export default function SettingsDialog({
           <Row
             icon={<VisibilityRounded fontSize="small" />}
             title="快速预览"
-            description="点击文件先在应用内预览"
+            description="点击文件先在应用内预览，不用外部程序打开"
             trailing={
               <ToggleSwitch
                 checked={settings?.quickPreview ?? true}
@@ -664,6 +676,7 @@ export default function SettingsDialog({
           <Row
             icon={<DownloadRounded fontSize="small" />}
             title="自动接收所有文件"
+            description="收到文件自动保存到收件目录，不再逐个确认"
             trailing={
               <ToggleSwitch
                 checked={settings?.autoAcceptAll ?? false}
@@ -675,10 +688,23 @@ export default function SettingsDialog({
           <Row
             icon={<VisibilityOffRounded fontSize="small" />}
             title="隐藏离线设备"
+            description="设备列表只显示在线的设备"
             trailing={
               <ToggleSwitch
                 checked={settings?.hideOffline ?? true}
                 onChange={(checked) => patch({ hideOffline: checked })}
+              />
+            }
+          />
+          <GroupDivider />
+          <Row
+            icon={<DragIndicatorRounded fontSize="small" />}
+            title="拖入暂存桶（Beta）"
+            description="屏幕右上角显示拖入区域，拖文件上去可直接放入暂存桶"
+            trailing={
+              <ToggleSwitch
+                checked={settings?.dropPad ?? false}
+                onChange={(checked) => patch({ dropPad: checked })}
               />
             }
           />
@@ -729,9 +755,11 @@ export default function SettingsDialog({
           <Row
             icon={<BlockRounded fontSize="small" />}
             title="设备黑名单"
-            description={(settings?.blocked ?? []).length > 0
-              ? `${(settings?.blocked ?? []).length} 台设备`
-              : undefined}
+            description={
+              (settings?.blocked ?? []).length > 0
+                ? `已拉黑 ${(settings?.blocked ?? []).length} 台设备，不再显示它们的消息`
+                : '拉黑后不再显示该设备的会话'
+            }
             trailing={
               <Button
                 size="small"
@@ -747,7 +775,7 @@ export default function SettingsDialog({
           <Row
             icon={<DeleteSweepRounded fontSize="small" />}
             title="清理缓存"
-            description={`当前缓存 ${formatSize(cacheBytes) || '0 B'}`}
+            description={`临时文件、缩略图与中继缓存 · 当前 ${formatSize(cacheBytes) || '0 B'}`}
             trailing={
               <Button
                 size="small"
@@ -763,6 +791,7 @@ export default function SettingsDialog({
           <Row
             icon={<ForumRounded fontSize="small" />}
             title="清理聊天记录"
+            description="删除选定设备的聊天记录，不影响设备列表"
             trailing={
               <Button
                 size="small"
@@ -781,6 +810,7 @@ export default function SettingsDialog({
           <Row
             icon={<DevicesRounded fontSize="small" />}
             title="清理离线设备"
+            description="删除所有离线设备及其聊天记录"
             trailing={
               <Button
                 size="small"
@@ -798,6 +828,7 @@ export default function SettingsDialog({
           <Row
             icon={<WindowRounded fontSize="small" />}
             title="关闭到托盘"
+            description="点关闭按钮时留在托盘后台继续接收文件"
             trailing={
               <ToggleSwitch
                 checked={settings?.closeToTray ?? true}
@@ -809,6 +840,7 @@ export default function SettingsDialog({
           <Row
             icon={<PowerSettingsNewRounded fontSize="small" />}
             title="开机自启"
+            description="开机后自动在后台启动，随时可以接收文件"
             trailing={
               <ToggleSwitch
                 checked={config?.autostart ?? false}
@@ -828,6 +860,7 @@ export default function SettingsDialog({
           <Row
             icon={<DescriptionRounded fontSize="small" />}
             title="运行日志"
+            description="查看软件的运行日志，排查问题时使用"
             onClick={() => {
               window.xt.openLogWindow().catch(() => {})
             }}

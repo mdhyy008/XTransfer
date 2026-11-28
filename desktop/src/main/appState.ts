@@ -34,6 +34,7 @@ export class AppState {
     misans: true,
     bleEnabled: false,
     webChat: false,
+    dropPad: false,
     relayUrl: '',
     blocked: [],
     aliases: {},
